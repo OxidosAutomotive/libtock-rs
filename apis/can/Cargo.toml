@@ -1,0 +1,12 @@
+[package]
+name = "libtock_can"
+version = "0.1.0"
+license = "Apache-2.0 OR MIT"
+edition = "2021"
+rust-version.workspace = true
+description = "libtock can driver"
+
+[dependencies]
+libtock_platform = { path = "../../platform" }
+libtock_console = { path = "../console" }
+libtock_runtime = { path = "../../runtime" }

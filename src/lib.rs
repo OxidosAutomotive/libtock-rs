@@ -91,3 +91,8 @@ pub mod key_value {
     use libtock_key_value as key_value;
     pub type KeyValue = key_value::KeyValue<super::runtime::TockSyscalls>;
 }
+
+pub mod can {
+    pub use libtock_can as can;
+    pub type Can = can::Can<super::runtime::TockSyscalls>;
+}
