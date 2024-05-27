@@ -1,31 +1,12 @@
 #![no_std]
 
 use core::cell::Cell;
-use core::mem::size_of;
 
 use libtock_platform::{
     share::scope, share::Handle, AllowRo, AllowRw, DefaultConfig, ErrorCode, Subscribe, Syscalls,
 };
 
 pub struct Can<S: Syscalls>(S);
-
-// #[derive(Debug, Copy, Clone, PartialEq)]
-// pub enum Mode {
-//     Ok,
-//     Warning,
-//     Passive,
-//     BusOff,
-// }
-
-// /// Defines the possible states of the peripheral
-// #[derive(Debug, Copy, Clone, PartialEq)]
-// pub enum State {
-//     /// The peripheral is enabled and functions normally
-//     Running(Mode),
-
-//     /// The peripheral is disabled
-//     Disabled,
-// }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum State {
@@ -35,20 +16,6 @@ pub enum State {
     Stopped = 3,
     BusOff = 4,
 }
-
-// fn state_from_tuple(value: (u32, u32)) -> Result<State, ErrorCode> {
-//     match value {
-//         (0, _) => Ok(State::Disabled),
-//         (1, mode) => Ok(State::Running(match mode {
-//             0 => Mode::Ok,
-//             1 => Mode::Passive,
-//             2 => Mode::Warning,
-//             3 => Mode::BusOff,
-//             _ => return Err(ErrorCode::Invalid),
-//         })),
-//         _ => Err(ErrorCode::Invalid),
-//     }
-// }
 
 impl From<u32> for State {
     fn from(value: u32) -> Self {
@@ -71,9 +38,9 @@ pub enum Id {
 impl From<u32> for Id {
     fn from(value: u32) -> Id {
         if value >> 30 == 1 {
-            Id::Extended(value & 0x1FFF_FFFF)
+            Id::Extended(value & 0x1fff_ffff)
         } else {
-            Id::Standard(value as u16)
+            Id::Standard((value & 0x7fff) as u16)
         }
     }
 }
@@ -81,9 +48,8 @@ impl From<u32> for Id {
 impl From<Id> for u32 {
     fn from(id: Id) -> u32 {
         match id {
-            // TODO: FIX THIS
             Id::Standard(id) => id as u32,
-            Id::Extended(id) => (1 << 30) | (id & 0x1FFF_FFFF),
+            Id::Extended(id) => id,
         }
     }
 }
@@ -145,13 +111,15 @@ impl<S: Syscalls> Can<S> {
     }
 
     pub fn start_receive<
-        const BUFFER_LEN: usize,
-        F: FnOnce(&Cell<Option<(u32,)>>, Handle<AllowRw<S, DRIVER_NUM, { allow_rw::MESSAGE_DST }>>),
+        F: FnOnce(
+            &Cell<Option<(u32, u32, u32)>>,
+            Handle<AllowRw<S, DRIVER_NUM, { allow_rw::MESSAGE_DST }>>,
+        ),
     >(
         f: F,
     ) -> Result<(), ErrorCode> {
-        let mut buffer = [0u8; BUFFER_LEN];
-        let new_message: Cell<Option<(u32,)>> = Cell::new(None);
+        let mut buffer = [0u8; CANFRAME_SIZE * CANFRAME_MAX_NUM + UNREAD_COUNTER_SIZE];
+        let new_message: Cell<Option<(u32, u32, u32)>> = Cell::new(None);
         scope::<
             (
                 AllowRw<_, DRIVER_NUM, { allow_rw::MESSAGE }>,
@@ -173,6 +141,7 @@ impl<S: Syscalls> Can<S> {
             )?;
 
             let r = S::command(DRIVER_NUM, START_RECEIVER, 0, 0).to_result();
+
             if let Err(ErrorCode::Already) = r {
                 Ok(())
             } else {
@@ -181,25 +150,22 @@ impl<S: Syscalls> Can<S> {
 
             f(&new_message, allow_handle_dst);
 
-            Ok(())
-            // S::command(DRIVER_NUM, STOP_RECEIVER, 0, 0).to_result()
+            S::command(DRIVER_NUM, STOP_RECEIVER, 0, 0).to_result()
         })
     }
 
-    pub fn read_messages<const BUFFER_LEN: usize>() -> Result<Frames<BUFFER_LEN>, ErrorCode> {
-        let mut buffer = [0u8; BUFFER_LEN];
-
-        // scope::<(AllowRw<_, DRIVER_NUM, { allow_rw::MESSAGE_DST }>,), _, _>(
-        //     |handle| -> Result<(), ErrorCode> {
-        //         let (allow_handle_dst,) = handle.split();
-        //         S::allow_rw::<DefaultConfig, DRIVER_NUM, { allow_rw::MESSAGE_DST }>(
-        //             allow_handle_dst,
-        //             &mut buffer,
-        //         )?;
-        //         // S::command(DRIVER_NUM, READ_MESSAGES, 0, 0).to_result()
-        //     },
-        // )?;
-
+    pub fn read_messages() -> Result<Frames, ErrorCode> {
+        let mut buffer = [0u8; UNREAD_COUNTER_SIZE + CANFRAME_SIZE * CANFRAME_MAX_NUM];
+        scope::<(AllowRw<_, DRIVER_NUM, { allow_rw::MESSAGE_DST }>,), _, _>(
+            |handle| -> Result<(), ErrorCode> {
+                let (allow_handle_dst,) = handle.split();
+                S::allow_rw::<DefaultConfig, DRIVER_NUM, { allow_rw::MESSAGE_DST }>(
+                    allow_handle_dst,
+                    &mut buffer,
+                )?;
+                S::command(DRIVER_NUM, READ_MESSAGES, 0, 0).to_result()
+            },
+        )?;
         Ok(buffer.into())
     }
 
@@ -232,6 +198,45 @@ impl<S: Syscalls> Can<S> {
             Err(ErrorCode::Invalid)
         }
     }
+
+    /// returns the last received frame with given Id. The kernel will save the last received frame for each Id it is configured to do so in software mailboxes
+    /// Returns:
+    ///     * Ok(Frame, read_counter, flags) = { - a frame object with Id, length, data[0:7]
+    ///                                          - how many times this frame was read, the counter is restarted if a new frame with the same Id is received, max 255
+    ///                                          - flag bits for previouse frame being overwritten without being read etc
+    ///     * Err(ErrorCode::NOMEM) = a frame with that Id was not received previously
+    ///     * Err(ErrorCode::INVAL) = the given Id is not part of the select Id
+    ///     * Err(ErrorCode::BadRVal) = the kernel returned unusual data
+    pub fn read_special_frame(id: &Id) -> Result<(Frame, u8, u8), ErrorCode> {
+        let result = S::command(DRIVER_NUM, READ_SPECIAL_FRAME, u32::from(*id), 0);
+        let returned = result
+            .get_success_u32_u64()
+            .ok_or(result.get_failure().unwrap_or(ErrorCode::BadRVal))?;
+
+        let status = u32::to_be_bytes(returned.0); // [read_counter; length; flags; 0]
+
+        let frame = Frame {
+            id: *id,
+            len: status[1],
+            message: u64::to_be_bytes(returned.1),
+        };
+        Ok((frame, status[0], status[2]))
+    }
+
+    /// returns the last received frame with given Id just the first time it is read, the frame is further considered stale
+    /// Returns:
+    ///     * Ok(Frame) = the first time a frame is read (with given Id)
+    ///     * Err(ErrorCode::Already) = the frame was not updated
+    ///     * Err(ErrorCode::NOMEM) = a frame with that Id was not received previously
+    ///     * Err(_) = as the above function (`read_special_frame`)
+    pub fn read_new_special_frame(id: &Id) -> Result<Frame, ErrorCode> {
+        let (frame, read_counter, _) = Self::read_special_frame(id)?;
+        if read_counter == 0 {
+            Ok(frame)
+        } else {
+            Err(ErrorCode::Already)
+        }
+    }
 }
 
 /// The peripheral can be configured to work in the following modes:
@@ -255,6 +260,13 @@ pub enum OperationMode {
     Normal = 3,
 }
 
+const CANFRAME_SIZE: usize = 14;
+const CANFRAME_MAX_NUM: usize = 3;
+const UNREAD_COUNTER_SIZE: usize = 1;
+
+const CANFRAME_HEADER_SIZE: usize = 6;
+const CANFRAME_DATA_SIZE: usize = 8;
+
 #[derive(Debug)]
 pub struct Frame {
     pub id: Id,
@@ -262,71 +274,69 @@ pub struct Frame {
     pub message: [u8; STANDARD_CAN_PACKET_SIZE],
 }
 
-pub struct Frames<const BUFFER_LEN: usize> {
-    pub messages: [u8; BUFFER_LEN],
-    position: usize,
-    num_messages: u8,
+#[derive(Debug)]
+pub struct Frames {
+    pub buffers: [u8; CANFRAME_MAX_NUM * CANFRAME_SIZE],
+    index: usize,
+    length: u8,
 }
 
-impl<const BUFFER_LEN: usize> Frames<BUFFER_LEN> {
+impl Frames {
     pub fn len(&self) -> usize {
-        self.num_messages as usize
+        self.length as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.length == 0
     }
 }
 
-impl<const BUFFER_LEN: usize> From<[u8; BUFFER_LEN]> for Frames<BUFFER_LEN> {
-    fn from(buffer: [u8; BUFFER_LEN]) -> Frames<BUFFER_LEN> {
-        assert!(BUFFER_LEN > 0);
+impl From<[u8; UNREAD_COUNTER_SIZE + CANFRAME_MAX_NUM * CANFRAME_SIZE]> for Frames {
+    fn from(buffer: [u8; UNREAD_COUNTER_SIZE + CANFRAME_MAX_NUM * CANFRAME_SIZE]) -> Frames {
+        // Get only the CAN frames from the buffer.
+        let mut messages = [0u8; CANFRAME_MAX_NUM * CANFRAME_SIZE];
+        messages.copy_from_slice(&buffer[UNREAD_COUNTER_SIZE..]);
+
         Frames {
-            messages: buffer,
-            position: 1,
-            num_messages: buffer[0],
+            buffers: messages,
+            index: 0,
+            length: buffer[0],
         }
     }
 }
 
-impl<const BUFFER_LEN: usize> Iterator for Frames<BUFFER_LEN> {
+impl Iterator for Frames {
     type Item = Frame;
 
     fn next(&mut self) -> Option<Frame> {
-        // if self.num_messages != 0 {
-        //     // writeln!(Console::<libtock_runtime::TockSyscalls>::writer(), "[libtock rs can driver] num messages {} and position {}", self.num_messages, self.position).unwrap();
-        // }
-        if self.num_messages > 0 && self.position + MESSAGE_HEADER_LEN < BUFFER_LEN {
-            let messages = &self.messages[self.position..];
-            // id
-            let id = (u32::from_le_bytes((messages[0..MESSAGE_ID_LEN]).try_into().unwrap())).into();
+        if self.length > 0 && self.index + CANFRAME_SIZE <= CANFRAME_MAX_NUM * CANFRAME_SIZE {
+            // The frames the current cursor is pointing at.
+            let frame = &self.buffers[self.index..(self.index + CANFRAME_SIZE)];
 
-            // writeln!(Console::<libtock_runtime::TockSyscalls>::writer(), "{:?} ", id).unwrap();
-            // len
-            let len = messages[MESSAGE_HEADER_LEN];
+            // Compute the CAN Frame ID.
+            let mut id_bytes = [0u8; 4];
+            id_bytes.copy_from_slice(&frame[0..4]);
+            let id: Id = u32::from_be_bytes(id_bytes).into();
 
-            // writeln!(Console::<libtock_runtime::TockSyscalls>::writer(), "len is {} & messages len {}",len, messages.len()).unwrap();
-            // data
-            if (len as usize + MESSAGE_HEADER_LEN + 1) < messages.len() {
-                let mut message = [0u8; STANDARD_CAN_PACKET_SIZE];
-                message[0..len as usize].copy_from_slice(
-                    &messages[MESSAGE_HEADER_LEN + 1..MESSAGE_HEADER_LEN + 1 + len as usize],
-                );
-                self.position = self.position + MESSAGE_HEADER_LEN + 1 + 8 as usize;
-                self.num_messages = self.num_messages - 1;
-                // writeln!(Console::<libtock_runtime::TockSyscalls>::writer(), "[libtock rs can driver] data is {:?}", &message[0..len as usize]).unwrap();
-                Some(Frame { id, len, message })
-            } else {
-                None
-            }
+            // Get the length. (Each packet still has reserved 8 bytes. (TODO: Remove)
+            let len = frame[4];
+
+            // The "next" item will actually be the the one of the current index.
+            let mut next_frame_data = [0u8; CANFRAME_DATA_SIZE];
+            next_frame_data.copy_from_slice(&frame[CANFRAME_HEADER_SIZE..]);
+
+            self.index += CANFRAME_SIZE;
+
+            Some(Frame {
+                id,
+                len,
+                message: next_frame_data,
+            })
         } else {
             None
         }
     }
 }
-
-// 4 - 0-3
-const MESSAGE_ID_LEN: usize = size_of::<u32>();
-// 5 - 5
-const MESSAGE_HEADER_LEN: usize = MESSAGE_ID_LEN + 1;
-// 14
-pub const MESSAGE_LEN: usize = MESSAGE_HEADER_LEN + STANDARD_CAN_PACKET_SIZE;
 
 // -----------------------------------------------------------------------------
 // Driver number and command IDs
@@ -346,6 +356,7 @@ const STOP_RECEIVER: u32 = 8;
 const SET_TIMING: u32 = 9;
 const READ_MESSAGES: u32 = 10;
 const STATE: u32 = 11;
+const READ_SPECIAL_FRAME: u32 = 12;
 
 mod subscribe {
     pub const MESSAGE_SENT: u32 = 2;
