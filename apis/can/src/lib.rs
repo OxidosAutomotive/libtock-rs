@@ -148,6 +148,16 @@ impl<S: Syscalls> Can<S> {
                 r
             }?;
 
+            loop {
+                S::yield_wait();
+                if let Some((status, _len, _id)) = new_message.get() {
+                    break match status {
+                        0 => Ok(()),
+                        e_code => Err(e_code.try_into().unwrap_or(ErrorCode::Fail))
+                    }
+                }
+            }?;
+
             f(&new_message, allow_handle_dst);
 
             S::command(DRIVER_NUM, STOP_RECEIVER, 0, 0).to_result()
