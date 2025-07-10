@@ -2,9 +2,9 @@
 
 use core::cell::Cell;
 use libtock_platform as platform;
-use libtock_platform::allow_rw::AllowRw;
 use libtock_platform::share;
 use libtock_platform::subscribe::Subscribe;
+use libtock_platform::{allow_ro::AllowRo, allow_rw::AllowRw};
 use libtock_platform::{DefaultConfig, ErrorCode, Syscalls};
 
 pub struct I2CMaster<S: Syscalls, C: Config = DefaultConfig>(S, C);
@@ -16,7 +16,7 @@ impl<S: Syscalls, C: Config> I2CMaster<S, C> {
 
     /// # Summary
     ///
-    /// Perform an I2C write followed by a read.
+    /// Perform an I2C write followed by a read, using the same buffer.
     ///
     /// TODO: Add async support
     ///
@@ -30,7 +30,7 @@ impl<S: Syscalls, C: Config> I2CMaster<S, C> {
     /// # Returns
     /// On success: Returns Ok(())
     /// On failure: Err(ErrorCode)
-    pub fn i2c_master_write_read_sync(
+    pub fn i2c_master_write_read_in_place_sync(
         addr: u16,
         buf: &mut [u8],
         w_len: u16,
@@ -57,9 +57,70 @@ impl<S: Syscalls, C: Config> I2CMaster<S, C> {
 
             S::command(
                 DRIVER_NUM,
-                i2c_master_cmd::MASTER_WRITE,
+                i2c_master_cmd::MASTER_WRITE_READ_IN_PLACE,
                 cmd_arg0,
                 r_len.into(),
+            )
+            .to_result::<(), ErrorCode>()?;
+
+            loop {
+                S::yield_wait();
+                if let Some((r0, status, _)) = called.get() {
+                    assert_eq!(r0, 0);
+                    return match status {
+                        0 => Ok(()),
+                        e_status => Err(e_status.try_into().unwrap_or(ErrorCode::Fail)),
+                    };
+                }
+            }
+        })
+    }
+
+    /// # Summary
+    ///
+    /// Perform an I2C write followed by a read.
+    ///
+    /// TODO: Add async support
+    ///
+    /// # Parameter
+    ///
+    /// * `addr`: Slave device address
+    /// * `write_buf`: The write buffer
+    /// * `read_buf`: The read buffer
+    ///
+    /// # Returns
+    /// On success: Returns Ok(())
+    /// On failure: Err(ErrorCode)
+    pub fn i2c_master_write_read_sync(
+        addr: u16,
+        write_buf: &[u8],
+        read_buf: &mut [u8],
+    ) -> Result<(), ErrorCode> {
+        let w_len = write_buf.len();
+        let r_len = read_buf.len();
+        let called: Cell<Option<(u32, u32, u32)>> = Cell::new(None);
+        let cmd_arg0: u32 = (w_len as u32) << 8 | addr as u32;
+        share::scope::<
+            (
+                AllowRw<_, DRIVER_NUM, { rw_allow::MASTER }>,
+                AllowRo<_, DRIVER_NUM, { ro_allow::MASTER }>,
+                Subscribe<_, DRIVER_NUM, { subscribe::MASTER_WRITE }>,
+            ),
+            _,
+            _,
+        >(|handle| {
+            let (allow_rw, allow_ro, subscribe) = handle.split();
+            S::allow_rw::<C, DRIVER_NUM, { rw_allow::MASTER }>(allow_rw, read_buf)?;
+            S::allow_ro::<C, DRIVER_NUM, { ro_allow::MASTER }>(allow_ro, write_buf)?;
+            S::subscribe::<_, _, C, DRIVER_NUM, { subscribe::MASTER_READ_WRITE }>(
+                subscribe, &called,
+            )?;
+
+            S::command(
+                DRIVER_NUM,
+                i2c_master_cmd::MASTER_WRITE_READ,
+                cmd_arg0,
+                r_len as u32,
             )
             .to_result::<(), ErrorCode>()?;
 
@@ -92,18 +153,18 @@ impl<S: Syscalls, C: Config> I2CMaster<S, C> {
     /// # Returns
     /// On success: Returns Ok(())
     /// On failure: Err(ErrorCode)
-    pub fn i2c_master_write_sync(addr: u16, buf: &mut [u8], len: u16) -> Result<(), ErrorCode> {
+    pub fn i2c_master_write_sync(addr: u16, buf: &[u8], len: u16) -> Result<(), ErrorCode> {
         let called: Cell<Option<(u32, u32, u32)>> = Cell::new(None);
         share::scope::<
             (
-                AllowRw<_, DRIVER_NUM, { rw_allow::MASTER }>,
+                AllowRo<_, DRIVER_NUM, { ro_allow::MASTER }>,
                 Subscribe<_, DRIVER_NUM, { subscribe::MASTER_WRITE }>,
             ),
             _,
             _,
         >(|handle| {
-            let (allow_rw, subscribe) = handle.split();
-            S::allow_rw::<C, DRIVER_NUM, { rw_allow::MASTER }>(allow_rw, buf)?;
+            let (allow_ro, subscribe) = handle.split();
+            S::allow_ro::<C, DRIVER_NUM, { ro_allow::MASTER }>(allow_ro, buf)?;
             S::subscribe::<_, _, C, DRIVER_NUM, { subscribe::MASTER_WRITE }>(subscribe, &called)?;
 
             S::command(
@@ -207,10 +268,17 @@ mod rw_allow {
     pub const MASTER: u32 = 1;
 }
 
+/// Ids for read-only allow buffers
+#[allow(unused)]
+mod ro_allow {
+    pub const MASTER: u32 = 0;
+}
+
 #[allow(unused)]
 mod i2c_master_cmd {
     pub const EXISTS: u32 = 0;
     pub const MASTER_WRITE: u32 = 1;
     pub const MASTER_READ: u32 = 2;
-    pub const MASTER_WRITE_READ: u32 = 3;
+    pub const MASTER_WRITE_READ_IN_PLACE: u32 = 3;
+    pub const MASTER_WRITE_READ: u32 = 4;
 }

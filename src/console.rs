@@ -1,0 +1,180 @@
+use core::{cell::Cell, future::Future};
+
+use embassy_sync::{
+    blocking_mutex::{raw::CriticalSectionRawMutex, Mutex},
+    waitqueue::AtomicWaker,
+};
+use libtock_console as console;
+pub type Console = console::Console<super::runtime::TockSyscalls>;
+pub use console::ConsoleWriter;
+use libtock_platform::{
+    share, subscribe::OneId, AllowRo, AllowRw, DefaultConfig, ErrorCode, Syscalls, Upcall,
+};
+use libtock_runtime::TockSyscalls;
+use portable_atomic::AtomicBool;
+
+pub struct ConsoleAsync;
+static STORAGE: ConsoleAsyncStorage = ConsoleAsyncStorage::new();
+
+struct ConsoleAsyncStorage {
+    waker: AtomicWaker,
+    busy: AtomicBool,
+    result: Mutex<CriticalSectionRawMutex, Cell<Option<(u32, Result<(), ErrorCode>)>>>,
+}
+
+impl ConsoleAsyncStorage {
+    const fn new() -> Self {
+        Self {
+            waker: AtomicWaker::new(),
+            busy: AtomicBool::new(false),
+            result: Mutex::new(Cell::new(None)),
+        }
+    }
+}
+
+impl ConsoleAsync {
+    pub async fn write(s: &[u8]) -> Result<(), ErrorCode> {
+        loop {
+            match Self::try_write(s).await {
+                Err(ErrorCode::Busy) => embassy_futures::yield_now().await,
+                result => return result,
+            }
+        }
+    }
+
+    pub async fn try_write(s: &[u8]) -> Result<(), ErrorCode> {
+        if STORAGE
+            .busy
+            .fetch_or(true, core::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(ErrorCode::Busy);
+        }
+
+        let res =
+            share::async_scope::<AllowRo<TockSyscalls, DRIVER_NUM, { allow_ro::WRITE }>, _, _>(
+                async |handle| {
+                    TockSyscalls::allow_ro::<DefaultConfig, DRIVER_NUM, { allow_ro::WRITE }>(
+                        handle, s,
+                    )?;
+
+                    TockSyscalls::command(DRIVER_NUM, command::WRITE, s.len() as u32, 0)
+                        .to_result::<(), ErrorCode>()?;
+
+                    Transaction.await.1
+                },
+            )
+            .await;
+
+        STORAGE
+            .busy
+            .store(false, core::sync::atomic::Ordering::SeqCst);
+        res
+    }
+
+    pub async fn try_read(buf: &mut [u8]) -> (u32, Result<(), ErrorCode>) {
+        if STORAGE
+            .busy
+            .fetch_or(true, core::sync::atomic::Ordering::SeqCst)
+        {
+            return (0u32, Err(ErrorCode::Busy));
+        }
+
+        let res = share::async_scope::<AllowRw<TockSyscalls, DRIVER_NUM, { allow_rw::READ }>, _, _>(
+            async |handle| {
+                let len = buf.len();
+                let res = TockSyscalls::allow_rw::<DefaultConfig, DRIVER_NUM, { allow_rw::READ }>(
+                    handle, buf,
+                );
+                if res.is_err() {
+                    return (0, res);
+                }
+
+                let res = TockSyscalls::command(DRIVER_NUM, command::READ, len as u32, 0)
+                    .to_result::<(), ErrorCode>();
+                if res.is_err() {
+                    return (0, res);
+                }
+
+                Transaction.await
+            },
+        )
+        .await;
+
+        STORAGE
+            .busy
+            .store(false, core::sync::atomic::Ordering::SeqCst);
+        res
+    }
+}
+
+struct Transaction;
+
+impl Future for Transaction {
+    type Output = (u32, Result<(), ErrorCode>);
+
+    fn poll(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Self::Output> {
+        STORAGE.waker.register(cx.waker());
+
+        STORAGE.result.lock(|result| match result.take() {
+            Some(res) => core::task::Poll::Ready(res),
+            None => core::task::Poll::Pending,
+        })
+    }
+}
+
+pub struct EmbassyListener;
+
+impl Upcall<OneId<DRIVER_NUM, { subscribe::READ }>> for EmbassyListener {
+    fn upcall(&self, status: u32, bytes_received: u32, _arg2: u32) {
+        let r = match status {
+            0 => Ok(()),
+            e_status => Err(e_status.try_into().unwrap_or(ErrorCode::Fail)),
+        };
+
+        STORAGE
+            .result
+            .lock(|res| res.set(Some((bytes_received, r))));
+        STORAGE.waker.wake();
+    }
+}
+
+impl Upcall<OneId<DRIVER_NUM, { subscribe::WRITE }>> for EmbassyListener {
+    fn upcall(&self, bytes_written: u32, _arg1: u32, _arg2: u32) {
+        STORAGE
+            .result
+            .lock(|res| res.set(Some((bytes_written, Ok(())))));
+        STORAGE.waker.wake();
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Driver number and command IDs
+// -----------------------------------------------------------------------------
+
+pub const DRIVER_NUM: u32 = 0x1;
+
+// Command IDs
+#[allow(unused)]
+mod command {
+    pub const EXISTS: u32 = 0;
+    pub const WRITE: u32 = 1;
+    pub const READ: u32 = 2;
+    pub const ABORT: u32 = 3;
+}
+
+#[allow(unused)]
+pub mod subscribe {
+    pub const WRITE: u32 = 1;
+    pub const READ: u32 = 2;
+}
+
+mod allow_ro {
+    pub const WRITE: u32 = 1;
+}
+
+mod allow_rw {
+    pub const READ: u32 = 1;
+}

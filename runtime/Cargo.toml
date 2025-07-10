@@ -12,8 +12,10 @@ version = "0.1.0"
 
 [dependencies]
 libtock_platform = { path = "../platform" }
+critical-section = { version = "1.1", optional = true }
 
 [features]
+critical_section_impl = ["critical-section"]
 
 # By default, libtock_runtime calls Memop to tell the Tock kernel where the
 # stack and heap begin. The kernel uses those addresses to specify the stack and

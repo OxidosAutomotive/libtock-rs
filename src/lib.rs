@@ -21,6 +21,9 @@ pub mod air_quality {
     pub use air_quality::AirQualityListener;
 }
 
+#[cfg(feature = "embassy")]
+pub mod alarm;
+#[cfg(not(feature = "embassy"))]
 pub mod alarm {
     use libtock_alarm as alarm;
     pub type Alarm = alarm::Alarm<super::runtime::TockSyscalls>;
@@ -41,11 +44,17 @@ pub mod buzzer {
     pub type Buzzer = buzzer::Buzzer<super::runtime::TockSyscalls>;
     pub use buzzer::Note;
 }
+#[cfg(feature = "embassy")]
+pub mod console;
+#[cfg(not(feature = "embassy"))]
 pub mod console {
     use libtock_console as console;
     pub type Console = console::Console<super::runtime::TockSyscalls>;
     pub use console::ConsoleWriter;
 }
+#[cfg(feature = "embassy")]
+pub mod gpio;
+#[cfg(not(feature = "embassy"))]
 pub mod gpio {
     use libtock_gpio as gpio;
     pub type Gpio = gpio::Gpio<super::runtime::TockSyscalls>;
@@ -54,6 +63,9 @@ pub mod gpio {
         PullDown, PullNone, PullUp,
     };
 }
+#[cfg(feature = "embassy")]
+pub mod i2c_master;
+#[cfg(not(feature = "embassy"))]
 pub mod i2c_master {
     use libtock_i2c_master as i2c_master;
     pub type I2CMaster = i2c_master::I2CMaster<super::runtime::TockSyscalls>;

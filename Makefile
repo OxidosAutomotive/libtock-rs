@@ -229,6 +229,14 @@ $(1): toolchain
 	cp target/$(1)/$(2)/release/examples/$(EXAMPLE).{tab,tbf} \
 		target/tbf/$(1)
 
+.PHONY: $(1)-embassy
+$(1)-embassy: toolchain
+	cd demos/embassy && LIBTOCK_PLATFORM=$(1) cargo run $(features) \
+		$(release) --target=$(2) --target-dir=target/$(1)
+	mkdir -p target/tbf/$(1)
+	cp demos/embassy/target/$(1)/$(2)/release/embassy.{tab,tbf} \
+		target/tbf/$(1)
+
 .PHONY: $(1)-st7789
 $(1)-st7789: toolchain
 	cd demos/st7789 && LIBTOCK_PLATFORM=$(1) cargo run $(features) \

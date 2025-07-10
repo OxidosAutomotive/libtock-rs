@@ -126,12 +126,12 @@ pub struct Pin<S: Syscalls> {
 }
 
 impl<S: Syscalls> Pin<S> {
-    pub fn make_output(&mut self) -> Result<OutputPin<S>, ErrorCode> {
+    pub fn make_output(&'_ mut self) -> Result<OutputPin<'_, S>, ErrorCode> {
         Gpio::<S>::enable_gpio_output(self.pin_number)?;
         Ok(OutputPin { pin: self })
     }
 
-    pub fn make_input<P: Pull>(&self) -> Result<InputPin<S, P>, ErrorCode> {
+    pub fn make_input<P: Pull>(&'_ self) -> Result<InputPin<'_, S, P>, ErrorCode> {
         Gpio::<S>::enable_gpio_input(self.pin_number, P::MODE)?;
         Ok(InputPin {
             pin: self,
@@ -172,6 +172,121 @@ impl<S: Syscalls, P: Pull> InputPin<'_, S, P> {
 
     pub fn disable_interrupts(&self) -> Result<(), ErrorCode> {
         Gpio::<S>::disable_interrupts(self.pin.pin_number)
+    }
+}
+
+#[cfg(feature = "embedded_hal_async")]
+pub mod asynchronous {
+    use core::future::Future;
+
+    use embassy_sync::waitqueue::AtomicWaker;
+    use libtock_platform::{subscribe::OneId, ErrorCode, Syscalls, Upcall};
+    use portable_atomic::AtomicBool;
+
+    use crate::{GpioState, InputPin, Pull};
+    use embedded_hal_async::digital::Wait;
+
+    /// NOTE: This could be improved, but `32` pins should cover most boards' needs.
+    const MAX_ASYNC_PINS: usize = 32;
+    static GPIO_PIN_STORAGES: [PinStorage; MAX_ASYNC_PINS] =
+        [const { PinStorage::new() }; MAX_ASYNC_PINS];
+
+    struct PinStorage {
+        waker: AtomicWaker,
+        triggered: AtomicBool,
+    }
+
+    impl PinStorage {
+        const fn new() -> Self {
+            Self {
+                waker: AtomicWaker::new(),
+                triggered: AtomicBool::new(false),
+            }
+        }
+    }
+
+    pub struct InputFuture {
+        pin_index: u32,
+    }
+
+    impl InputFuture {
+        fn new(pin_index: u32) -> Self {
+            InputFuture { pin_index }
+        }
+    }
+
+    impl Future for InputFuture {
+        type Output = ();
+
+        fn poll(
+            self: core::pin::Pin<&mut Self>,
+            cx: &mut core::task::Context<'_>,
+        ) -> core::task::Poll<Self::Output> {
+            GPIO_PIN_STORAGES[self.pin_index as usize]
+                .waker
+                .register(cx.waker());
+
+            if GPIO_PIN_STORAGES[self.pin_index as usize]
+                .triggered
+                .fetch_and(false, core::sync::atomic::Ordering::Relaxed)
+            {
+                core::task::Poll::Ready(())
+            } else {
+                core::task::Poll::Pending
+            }
+        }
+    }
+
+    /// Structure used for registering the handler that wakes the
+    /// `async` tasks, called when a gpio interrupt occurs.
+    pub struct EmbassyListener;
+
+    impl Upcall<OneId<{ crate::DRIVER_NUM }, 0>> for EmbassyListener {
+        fn upcall(&self, gpio_index: u32, _value: u32, _arg2: u32) {
+            GPIO_PIN_STORAGES[gpio_index as usize].waker.wake();
+            GPIO_PIN_STORAGES[gpio_index as usize]
+                .triggered
+                .store(true, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    impl<'a, S: Syscalls, P: Pull> embedded_hal::digital::ErrorType for InputPin<'a, S, P> {
+        type Error = ErrorCode;
+    }
+
+    impl<'a, S: Syscalls, P: Pull> Wait for InputPin<'a, S, P> {
+        async fn wait_for_high(&mut self) -> Result<(), Self::Error> {
+            if self.read()? == GpioState::High {
+                Ok(())
+            } else {
+                self.wait_for_rising_edge().await
+            }
+        }
+
+        async fn wait_for_low(&mut self) -> Result<(), Self::Error> {
+            if self.read()? == GpioState::Low {
+                Ok(())
+            } else {
+                self.wait_for_falling_edge().await
+            }
+        }
+
+        async fn wait_for_rising_edge(&mut self) -> Result<(), Self::Error> {
+            self.enable_interrupts(crate::PinInterruptEdge::Rising)?;
+            InputFuture::new(self.pin.pin_number).await;
+            Ok(())
+        }
+
+        async fn wait_for_falling_edge(&mut self) -> Result<(), Self::Error> {
+            self.enable_interrupts(crate::PinInterruptEdge::Falling)?;
+            InputFuture::new(self.pin.pin_number).await;
+            Ok(())
+        }
+
+        async fn wait_for_any_edge(&mut self) -> Result<(), Self::Error> {
+            self.enable_interrupts(crate::PinInterruptEdge::Either)?;
+            InputFuture::new(self.pin.pin_number).await;
+            Ok(())
+        }
     }
 }
 

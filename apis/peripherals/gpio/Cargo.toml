@@ -10,10 +10,23 @@ description = "libtock gpio driver"
 
 [features]
 rust_embedded = ["embedded-hal"]
+embedded_hal_async = [
+    "embedded-hal-async",
+    "embedded-hal",
+    "critical-section",
+    "portable-atomic",
+    "embassy-sync",
+]
 
 [dependencies]
 libtock_platform = { path = "../../../platform" }
 embedded-hal = { version = "1.0", optional = true }
+embedded-hal-async = { version = "1.0", optional = true }
+embassy-sync = { git = "https://github.com/OxidosAutomotive/embassy.git", branch = "tock_support", optional = true }
+critical-section = { version = "1.1", optional = true }
+portable-atomic = { version = "1", default-features = false, features = [
+    "critical-section",
+], optional = true }
 
 [dev-dependencies]
 libtock_unittest = { path = "../../../unittest" }

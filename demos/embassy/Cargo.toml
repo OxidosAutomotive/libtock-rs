@@ -1,0 +1,28 @@
+[package]
+name = "embassy"
+version = "0.1.0"
+edition = "2021"
+rust-version.workspace = true
+authors = ["George Dănuț Aldea <danutz.aldea23@gmail.com>"]
+
+# description = """A demo to drive a ST7789 display via SPI using libtock-rs."""
+license = "Apache-2.0 OR MIT"
+
+[dependencies]
+libtock = { git = "https://github.com/OxidosAutomotive/libtock-rs.git", branch = "embassy", features = [
+    "embassy",
+] }
+embassy-executor = { git = "https://github.com/OxidosAutomotive/embassy.git", branch = "tock_support", features = [
+    "arch-tock",
+    "executor-thread",
+] }
+embassy-time = { git = "https://github.com/OxidosAutomotive/embassy.git", branch = "tock_support", features = [
+    "dynamic-tick-rate",
+] }
+embassy-futures = { git = "https://github.com/OxidosAutomotive/embassy.git", branch = "tock_support" }
+embedded-hal-async = { version = "1.0" }
+static_cell = "2.1.1"
+heapless = "0.8.0"
+
+[build-dependencies]
+libtock_build_scripts = { path = "../../build_scripts" }
