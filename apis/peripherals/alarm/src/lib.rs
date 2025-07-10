@@ -1,8 +1,9 @@
 #![no_std]
 
 use core::cell::Cell;
-use libtock_platform as platform;
-use libtock_platform::share;
+use libtock_platform::share::{self, Handle};
+use libtock_platform::subscribe::{OneId, Subscribe};
+use libtock_platform::{self as platform, Upcall};
 use libtock_platform::{DefaultConfig, ErrorCode, Syscalls};
 
 /// The alarm driver
@@ -99,6 +100,47 @@ impl<S: Syscalls, C: platform::subscribe::Config> Alarm<S, C> {
                 }
             }
         })
+    }
+
+    pub fn set_relative<T: Convert>(time: T) -> Result<u32, ErrorCode> {
+        let freq = Self::get_frequency()?;
+        S::command(DRIVER_NUM, command::SET_RELATIVE, time.to_ticks(freq).0, 0).to_result()
+    }
+
+    pub fn set_absolute<T: Convert, R: Convert>(reference: R, time: T) -> Result<u32, ErrorCode> {
+        let freq = Self::get_frequency()?;
+        S::command(
+            DRIVER_NUM,
+            command::SET_ABSOLUTE,
+            reference.to_ticks(freq).0,
+            time.to_ticks(freq).0,
+        )
+        .to_result()
+    }
+
+    pub fn cancel() -> Result<(), ErrorCode> {
+        S::command(DRIVER_NUM, command::STOP, 0, 0).to_result()
+    }
+
+    pub fn register_listener<'share, F: Fn(u32, u32)>(
+        listener: &'share AlarmListener<F>,
+        subscribe: Handle<Subscribe<'share, S, DRIVER_NUM, { subscribe::CALLBACK }>>,
+    ) -> Result<(), ErrorCode> {
+        S::subscribe::<_, _, DefaultConfig, DRIVER_NUM, { subscribe::CALLBACK }>(
+            subscribe, listener,
+        )
+    }
+
+    pub fn unregister_listener() {
+        S::unsubscribe(DRIVER_NUM, subscribe::CALLBACK);
+    }
+}
+
+pub struct AlarmListener<F: Fn(u32, u32)>(pub F);
+
+impl<F: Fn(u32, u32)> Upcall<OneId<DRIVER_NUM, 0>> for AlarmListener<F> {
+    fn upcall(&self, now: u32, expiration: u32, _arg2: u32) {
+        self.0(now, expiration)
     }
 }
 

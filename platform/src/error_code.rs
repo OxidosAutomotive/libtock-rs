@@ -299,3 +299,11 @@ impl embedded_hal::spi::Error for ErrorCode {
         ErrorKind::Other
     }
 }
+
+#[cfg(feature = "rust_embedded")]
+impl embedded_hal::i2c::Error for ErrorCode {
+    fn kind(&self) -> embedded_hal::i2c::ErrorKind {
+        use embedded_hal::i2c::ErrorKind;
+        ErrorKind::Other
+    }
+}

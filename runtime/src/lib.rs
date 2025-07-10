@@ -30,3 +30,6 @@ pub struct TockSyscalls;
 mod syscalls_impl_arm;
 #[cfg(target_arch = "riscv32")]
 mod syscalls_impl_riscv;
+
+#[cfg(feature = "critical_section_impl")]
+mod critical_section_impl;
