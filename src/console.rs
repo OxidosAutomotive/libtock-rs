@@ -1,4 +1,4 @@
-use core::{cell::Cell, future::Future};
+use core::{cell::Cell, future::Future, pin::Pin};
 
 use embassy_sync::{
     blocking_mutex::{raw::CriticalSectionRawMutex, Mutex},
@@ -8,13 +8,56 @@ use libtock_console as console;
 pub type Console = console::Console<super::runtime::TockSyscalls>;
 pub use console::ConsoleWriter;
 use libtock_platform::{
-    share, subscribe::OneId, AllowRo, AllowRw, DefaultConfig, ErrorCode, Syscalls, Upcall,
+    allow_ro::AllowRoBuffer, allow_rw::AllowRwBuffer, subscribe::OneId, DefaultConfig, ErrorCode,
+    Syscalls, Upcall,
 };
 use libtock_runtime::TockSyscalls;
 use portable_atomic::AtomicBool;
 
 pub struct ConsoleAsync;
 static STORAGE: ConsoleAsyncStorage = ConsoleAsyncStorage::new();
+
+pub struct ConsoleBufWriter<const SIZE: usize> {
+    buf: [u8; SIZE],
+    pos: usize,
+}
+
+impl<const SIZE: usize> ConsoleBufWriter<SIZE> {
+    pub fn new() -> Self {
+        Self {
+            buf: [0; SIZE],
+            pos: 0,
+        }
+    }
+
+    pub fn into_allow_ro_buffer(self) -> ConsoleAsyncAllowRoBuffer<SIZE> {
+        self.into()
+    }
+}
+
+impl<const SIZE: usize> core::fmt::Write for ConsoleBufWriter<SIZE> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        if s.len() + self.pos > SIZE {
+            return Err(core::fmt::Error);
+        }
+
+        self.buf[self.pos..][..s.len()].copy_from_slice(s.as_bytes());
+        self.pos += s.len();
+        Ok(())
+    }
+}
+
+type ConsoleAsyncAllowRoBuffer<const SIZE: usize> =
+    AllowRoBuffer<TockSyscalls, DRIVER_NUM, { allow_ro::WRITE }, SIZE>;
+
+type ConsoleAsyncAllowRwBuffer<const SIZE: usize> =
+    AllowRwBuffer<TockSyscalls, DRIVER_NUM, { allow_rw::READ }, SIZE>;
+
+impl<const SIZE: usize> Into<ConsoleAsyncAllowRoBuffer<SIZE>> for ConsoleBufWriter<SIZE> {
+    fn into(self) -> ConsoleAsyncAllowRoBuffer<SIZE> {
+        ConsoleAsyncAllowRoBuffer::<SIZE>::from_array(self.buf)
+    }
+}
 
 struct ConsoleAsyncStorage {
     waker: AtomicWaker,
@@ -33,7 +76,9 @@ impl ConsoleAsyncStorage {
 }
 
 impl ConsoleAsync {
-    pub async fn write(s: &[u8]) -> Result<(), ErrorCode> {
+    pub async fn write<const SIZE: usize>(
+        s: &mut Pin<&mut ConsoleAsyncAllowRoBuffer<SIZE>>,
+    ) -> Result<(), ErrorCode> {
         loop {
             match Self::try_write(s).await {
                 Err(ErrorCode::Busy) => embassy_futures::yield_now().await,
@@ -42,7 +87,9 @@ impl ConsoleAsync {
         }
     }
 
-    pub async fn try_write(s: &[u8]) -> Result<(), ErrorCode> {
+    pub async fn try_write<const SIZE: usize>(
+        s: &mut Pin<&mut ConsoleAsyncAllowRoBuffer<SIZE>>,
+    ) -> Result<(), ErrorCode> {
         if STORAGE
             .busy
             .fetch_or(true, core::sync::atomic::Ordering::SeqCst)
@@ -50,20 +97,15 @@ impl ConsoleAsync {
             return Err(ErrorCode::Busy);
         }
 
-        let res =
-            share::async_scope::<AllowRo<TockSyscalls, DRIVER_NUM, { allow_ro::WRITE }>, _, _>(
-                async |handle| {
-                    TockSyscalls::allow_ro::<DefaultConfig, DRIVER_NUM, { allow_ro::WRITE }>(
-                        handle, s,
-                    )?;
-
-                    TockSyscalls::command(DRIVER_NUM, command::WRITE, s.len() as u32, 0)
-                        .to_result::<(), ErrorCode>()?;
-
-                    Transaction.await.1
-                },
-            )
-            .await;
+        let res = s.allow::<DefaultConfig>().and(
+            TockSyscalls::command(DRIVER_NUM, command::WRITE, SIZE as u32, 0)
+                .to_result::<(), ErrorCode>(),
+        );
+        let res = if res.is_ok() {
+            Transaction.await.1
+        } else {
+            res
+        };
 
         STORAGE
             .busy
@@ -71,7 +113,9 @@ impl ConsoleAsync {
         res
     }
 
-    pub async fn try_read(buf: &mut [u8]) -> (u32, Result<(), ErrorCode>) {
+    pub async fn try_read<const SIZE: usize>(
+        buf: &mut Pin<&mut ConsoleAsyncAllowRwBuffer<SIZE>>,
+    ) -> (u32, Result<(), ErrorCode>) {
         if STORAGE
             .busy
             .fetch_or(true, core::sync::atomic::Ordering::SeqCst)
@@ -79,26 +123,16 @@ impl ConsoleAsync {
             return (0u32, Err(ErrorCode::Busy));
         }
 
-        let res = share::async_scope::<AllowRw<TockSyscalls, DRIVER_NUM, { allow_rw::READ }>, _, _>(
-            async |handle| {
-                let len = buf.len();
-                let res = TockSyscalls::allow_rw::<DefaultConfig, DRIVER_NUM, { allow_rw::READ }>(
-                    handle, buf,
-                );
-                if res.is_err() {
-                    return (0, res);
-                }
+        let res = buf.allow::<DefaultConfig>().and(
+            TockSyscalls::command(DRIVER_NUM, command::READ, SIZE as u32, 0)
+                .to_result::<(), ErrorCode>(),
+        );
 
-                let res = TockSyscalls::command(DRIVER_NUM, command::READ, len as u32, 0)
-                    .to_result::<(), ErrorCode>();
-                if res.is_err() {
-                    return (0, res);
-                }
-
-                Transaction.await
-            },
-        )
-        .await;
+        let res = if res.is_ok() {
+            Transaction.await
+        } else {
+            (0, res)
+        };
 
         STORAGE
             .busy

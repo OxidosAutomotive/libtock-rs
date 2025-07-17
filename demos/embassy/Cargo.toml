@@ -21,8 +21,6 @@ embassy-time = { git = "https://github.com/OxidosAutomotive/embassy.git", branch
 ] }
 embassy-futures = { git = "https://github.com/OxidosAutomotive/embassy.git", branch = "tock_support" }
 embedded-hal-async = { version = "1.0" }
-static_cell = "2.1.1"
-heapless = "0.8.0"
 
 [build-dependencies]
 libtock_build_scripts = { path = "../../build_scripts" }

@@ -1,13 +1,13 @@
 pub type I2CMaster = libtock_i2c_master::I2CMaster<super::runtime::TockSyscalls>;
 
-use core::{cell::Cell, future::Future};
+use core::{cell::Cell, future::Future, pin::Pin};
 
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, blocking_mutex::Mutex, waitqueue::AtomicWaker,
 };
-use embedded_hal::i2c::Operation;
 use libtock_platform::{
-    share, subscribe::OneId, AllowRo, AllowRw, DefaultConfig, ErrorCode, Syscalls, Upcall,
+    allow_ro::AllowRoBuffer, allow_rw::AllowRwBuffer, subscribe::OneId, DefaultConfig, ErrorCode,
+    Syscalls, Upcall,
 };
 use libtock_runtime::TockSyscalls;
 use portable_atomic::AtomicBool;
@@ -31,101 +31,17 @@ impl AsyncI2cMasterStorage {
     }
 }
 
-impl embedded_hal_async::i2c::ErrorType for AsyncI2cMaster {
-    type Error = ErrorCode;
-}
+pub type I2cAllowRwBuffer<const SIZE: usize> =
+    AllowRwBuffer<TockSyscalls, DRIVER_NUM, { rw_allow::MASTER }, SIZE>;
 
-impl<A: embedded_hal_async::i2c::AddressMode + Into<u16> + 'static> embedded_hal_async::i2c::I2c<A>
-    for AsyncI2cMaster
-{
-    async fn transaction(
-        &mut self,
-        address: A,
-        operations: &mut [embedded_hal::i2c::Operation<'_>],
-    ) -> Result<(), Self::Error> {
-        let addr: u16 = address.into();
-
-        match operations {
-            [Operation::Read(read)] => self.read(addr, read).await,
-            [Operation::Write(write)] => self.write(addr, write).await,
-            [Operation::Write(write), Operation::Read(read)] => {
-                self.write_read(addr, write, read).await
-            }
-            _ => Err(ErrorCode::NoSupport),
-        }
-    }
-}
+pub type I2cAllowRoBuffer<const SIZE: usize> =
+    AllowRoBuffer<TockSyscalls, DRIVER_NUM, { ro_allow::MASTER }, SIZE>;
 
 impl AsyncI2cMaster {
-    async fn read(&mut self, addr: u16, read: &mut [u8]) -> Result<(), ErrorCode> {
-        if STORAGE
-            .busy
-            .fetch_or(true, core::sync::atomic::Ordering::Relaxed)
-        {
-            return Err(ErrorCode::Busy);
-        }
-
-        let addr = addr as u32;
-        let len = read.len() as u32;
-
-        let res =
-            share::async_scope::<AllowRw<TockSyscalls, DRIVER_NUM, { rw_allow::MASTER }>, _, _>(
-                async |handle| {
-                    TockSyscalls::allow_rw::<DefaultConfig, DRIVER_NUM, { rw_allow::MASTER }>(
-                        handle, read,
-                    )?;
-
-                    TockSyscalls::command(DRIVER_NUM, i2c_master_cmd::MASTER_READ, addr, len)
-                        .to_result::<(), ErrorCode>()?;
-
-                    Transaction.await
-                },
-            )
-            .await;
-
-        STORAGE
-            .busy
-            .store(false, core::sync::atomic::Ordering::Relaxed);
-        res
-    }
-
-    async fn write(&mut self, addr: u16, write: &[u8]) -> Result<(), ErrorCode> {
-        if STORAGE
-            .busy
-            .fetch_or(true, core::sync::atomic::Ordering::Relaxed)
-        {
-            return Err(ErrorCode::Busy);
-        }
-
-        let addr = addr as u32;
-        let len = write.len() as u32;
-
-        let res =
-            share::async_scope::<AllowRo<TockSyscalls, DRIVER_NUM, { ro_allow::MASTER }>, _, _>(
-                async |handle| {
-                    TockSyscalls::allow_ro::<DefaultConfig, DRIVER_NUM, { ro_allow::MASTER }>(
-                        handle, write,
-                    )?;
-
-                    TockSyscalls::command(DRIVER_NUM, i2c_master_cmd::MASTER_WRITE, addr, len)
-                        .to_result::<(), ErrorCode>()?;
-
-                    Transaction.await
-                },
-            )
-            .await;
-
-        STORAGE
-            .busy
-            .store(false, core::sync::atomic::Ordering::Relaxed);
-        res
-    }
-
-    async fn write_read(
+    pub async fn read<const SIZE: usize>(
         &mut self,
         addr: u16,
-        write: &[u8],
-        read: &mut [u8],
+        read: &mut Pin<&mut I2cAllowRwBuffer<SIZE>>,
     ) -> Result<(), ErrorCode> {
         if STORAGE
             .busy
@@ -135,32 +51,113 @@ impl AsyncI2cMaster {
         }
 
         let addr = addr as u32;
-        let cmd_arg0 = (write.len() as u32) << 8 | addr as u32;
-        let len = read.len() as u32;
+        let len = SIZE as u32;
 
-        let res = share::async_scope::<
-            (
-                AllowRo<TockSyscalls, DRIVER_NUM, { ro_allow::MASTER }>,
-                AllowRw<TockSyscalls, DRIVER_NUM, { rw_allow::MASTER }>,
-            ),
-            _,
-            _,
-        >(async |handle| {
-            let (allow_ro, allow_rw) = handle.split();
+        let res = read.allow::<DefaultConfig>().and(
+            TockSyscalls::command(DRIVER_NUM, i2c_master_cmd::MASTER_READ, addr, len)
+                .to_result::<(), ErrorCode>(),
+        );
 
-            TockSyscalls::allow_ro::<DefaultConfig, DRIVER_NUM, { ro_allow::MASTER }>(
-                allow_ro, write,
-            )?;
-            TockSyscalls::allow_rw::<DefaultConfig, DRIVER_NUM, { rw_allow::MASTER }>(
-                allow_rw, read,
-            )?;
+        let res = if res.is_ok() { Transaction.await } else { res };
 
-            TockSyscalls::command(DRIVER_NUM, i2c_master_cmd::MASTER_WRITE_READ, cmd_arg0, len)
-                .to_result::<(), ErrorCode>()?;
+        STORAGE
+            .busy
+            .store(false, core::sync::atomic::Ordering::Relaxed);
 
-            Transaction.await
-        })
-        .await;
+        res
+    }
+
+    pub async fn write<const SIZE: usize>(
+        &mut self,
+        addr: u16,
+        write: &mut Pin<&mut I2cAllowRoBuffer<SIZE>>,
+    ) -> Result<(), ErrorCode> {
+        if STORAGE
+            .busy
+            .fetch_or(true, core::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(ErrorCode::Busy);
+        }
+
+        let addr = addr as u32;
+        let len = SIZE as u32;
+
+        let res = write.allow::<DefaultConfig>().and(
+            TockSyscalls::command(DRIVER_NUM, i2c_master_cmd::MASTER_WRITE, addr, len)
+                .to_result::<(), ErrorCode>(),
+        );
+        let res = if res.is_ok() { Transaction.await } else { res };
+
+        STORAGE
+            .busy
+            .store(false, core::sync::atomic::Ordering::Relaxed);
+        res
+    }
+
+    pub async fn write_read<const READ_SIZE: usize, const WRITE_SIZE: usize>(
+        &mut self,
+        addr: u16,
+        write: &mut Pin<&mut I2cAllowRoBuffer<WRITE_SIZE>>,
+        read: &mut Pin<&mut I2cAllowRwBuffer<READ_SIZE>>,
+    ) -> Result<(), ErrorCode> {
+        if STORAGE
+            .busy
+            .fetch_or(true, core::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(ErrorCode::Busy);
+        }
+
+        let addr = addr as u32;
+        let cmd_arg0 = (WRITE_SIZE as u32) << 8 | addr as u32;
+        let len = READ_SIZE as u32;
+
+        let res = read
+            .allow::<DefaultConfig>()
+            .and(write.allow::<DefaultConfig>())
+            .and(
+                TockSyscalls::command(DRIVER_NUM, i2c_master_cmd::MASTER_WRITE_READ, cmd_arg0, len)
+                    .to_result::<(), ErrorCode>(),
+            );
+        let res = if res.is_ok() { Transaction.await } else { res };
+
+        STORAGE
+            .busy
+            .store(false, core::sync::atomic::Ordering::Relaxed);
+        res
+    }
+
+    pub async fn write_read_in_place<const SIZE: usize>(
+        &mut self,
+        addr: u16,
+        w_len: u16,
+        r_len: u16,
+        buf: &mut Pin<&mut I2cAllowRwBuffer<SIZE>>,
+    ) -> Result<(), ErrorCode> {
+        if (r_len as usize) > SIZE || (w_len as usize) > SIZE {
+            return Err(ErrorCode::NoMem);
+        }
+
+        if STORAGE
+            .busy
+            .fetch_or(true, core::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(ErrorCode::Busy);
+        }
+
+        let addr = addr as u32;
+        let cmd_arg0 = (w_len as u32) << 8 | addr as u32;
+        let len = r_len as u32;
+
+        let res = buf.allow::<DefaultConfig>().and(
+            TockSyscalls::command(
+                DRIVER_NUM,
+                i2c_master_cmd::MASTER_WRITE_READ_IN_PLACE,
+                cmd_arg0,
+                len,
+            )
+            .to_result::<(), ErrorCode>(),
+        );
+        let res = if res.is_ok() { Transaction.await } else { res };
 
         STORAGE
             .busy
