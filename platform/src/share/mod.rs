@@ -15,15 +15,6 @@ pub fn scope<L: List, Output, F: FnOnce(Handle<L>) -> Output>(fcn: F) -> Output 
     fcn(unsafe { Handle::new(&list) })
 }
 
-/// Creates an async scope in which objects may safely be shared with the kernel.
-pub async fn async_scope<L: List, Output, F: AsyncFnOnce(Handle<L>) -> Output>(fcn: F) -> Output {
-    let list = Default::default();
-    // Safety: We do not move the L out of the `list` variable. The `list`
-    // variable will be dropped at the end of the scope, immediately before the
-    // L becomes invalid.
-    fcn(unsafe { Handle::new(&list) }).await
-}
-
 /// A list of objects that may be shared with the kernel. `List` is implemented
 /// for system call types such as `Subscribe`, as well as (potentially-nested)
 /// tuples of such types.

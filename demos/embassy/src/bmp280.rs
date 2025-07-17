@@ -5,6 +5,7 @@
 
 use core::fmt;
 use core::fmt::Write;
+use core::pin::pin;
 
 #[derive(Debug, Copy, Clone)]
 /// Control
@@ -134,14 +135,16 @@ enum Register {
 
 use embassy_futures::block_on;
 use libtock::gpio::OutputPin;
+use libtock::i2c_master::{AsyncI2cMaster, I2cAllowRoBuffer, I2cAllowRwBuffer};
+use libtock::platform::ErrorCode;
 
 /// The default address for the BMP280
-const DEFAULT_ADDRESS: u8 = 0x76;
+const DEFAULT_ADDRESS: u16 = 0x76;
 
 /// BMP280 driver
-pub struct BMP280<I2C: embedded_hal_async::i2c::I2c> {
-    com: I2C,
-    addr: u8,
+pub struct BMP280 {
+    com: AsyncI2cMaster,
+    addr: u16,
     // Temperature compensation
     dig_t1: u16,
     dig_t2: i16,
@@ -159,13 +162,10 @@ pub struct BMP280<I2C: embedded_hal_async::i2c::I2c> {
     dig_p9: i16,
 }
 
-impl<I2C: embedded_hal_async::i2c::I2c> BMP280<I2C> {
+impl BMP280 {
     /// Creates new BMP280 driver with the specified address
-    pub fn new_with_address<E>(i2c: I2C, addr: u8) -> Result<BMP280<I2C>, E>
-    where
-        I2C: embedded_hal_async::i2c::I2c<Error = E>,
-    {
-        let mut chip = BMP280 {
+    pub fn new_with_address(i2c: AsyncI2cMaster, addr: u16) -> Self {
+        let mut chip = Self {
             com: i2c,
             addr,
             dig_t1: 0,
@@ -183,25 +183,30 @@ impl<I2C: embedded_hal_async::i2c::I2c> BMP280<I2C> {
             dig_p9: 0,
         };
 
-        Ok(chip)
+        chip
     }
 
     /// Create a new BMP280 driver with the default address
-    pub fn new<E>(i2c: I2C) -> Result<BMP280<I2C>, E>
-    where
-        I2C: embedded_hal_async::i2c::I2c<Error = E>,
-    {
+    pub fn new(i2c: AsyncI2cMaster) -> Self {
         Self::new_with_address(i2c, DEFAULT_ADDRESS)
     }
 }
 
-impl<I2C: embedded_hal_async::i2c::I2c> BMP280<I2C> {
+impl BMP280 {
     pub async fn read_calibration(&mut self) {
         let mut data: [u8; 24] = [0; 24];
+        let mut pinned = pin!(I2cAllowRwBuffer::from_array(data));
+
         let _ = self
             .com
-            .write_read(self.addr, &[Register::calib00 as u8], &mut data)
+            .write_read(
+                self.addr,
+                &mut pin!(I2cAllowRoBuffer::from_array([Register::calib00 as u8])),
+                &mut pinned,
+            )
             .await;
+
+        let data = I2cAllowRwBuffer::get_mut_buffer(pinned);
 
         self.dig_t1 = ((data[1] as u16) << 8) | (data[0] as u16);
         self.dig_t2 = ((data[3] as i16) << 8) | (data[2] as i16);
@@ -221,10 +226,18 @@ impl<I2C: embedded_hal_async::i2c::I2c> BMP280<I2C> {
     /// Reads and returns pressure
     pub async fn pressure(&mut self) -> f64 {
         let mut data: [u8; 6] = [0, 0, 0, 0, 0, 0];
+        let mut pinned = pin!(I2cAllowRwBuffer::from_array(data));
         let _ = self
             .com
-            .write_read(self.addr, &[Register::press as u8], &mut data)
+            .write_read(
+                self.addr,
+                &mut pin!(I2cAllowRoBuffer::from_array([Register::press as u8])),
+                &mut pinned,
+            )
             .await;
+
+        let data = I2cAllowRwBuffer::get_mut_buffer(pinned);
+
         let press = (data[0] as u32) << 12 | (data[1] as u32) << 4 | (data[2] as u32) >> 4;
 
         let mut var1 = ((self.t_fine as f64) / 2.0) - 64000.0;
@@ -247,10 +260,17 @@ impl<I2C: embedded_hal_async::i2c::I2c> BMP280<I2C> {
     /// Reads and returns temperature
     pub async fn temp(&mut self) -> f64 {
         let mut data: [u8; 6] = [0, 0, 0, 0, 0, 0];
+        let mut pinned = pin!(I2cAllowRwBuffer::from_array(data));
         let _ = self
             .com
-            .write_read(self.addr, &[Register::press as u8], &mut data)
+            .write_read(
+                self.addr,
+                &mut pin!(I2cAllowRoBuffer::from_array([Register::press as u8])),
+                &mut pinned,
+            )
             .await;
+        let data = I2cAllowRwBuffer::get_mut_buffer(pinned);
+
         let _pres = (data[0] as u32) << 12 | (data[1] as u32) << 4 | (data[2] as u32) >> 4;
         let temp = (data[3] as u32) << 12 | (data[4] as u32) << 4 | (data[5] as u32) >> 4;
 
@@ -358,19 +378,27 @@ impl<I2C: embedded_hal_async::i2c::I2c> BMP280<I2C> {
     }
 
     async fn write_byte(&mut self, reg: Register, byte: u8) {
-        let mut buffer = [0];
         let _ = self
             .com
-            .write_read(self.addr, &[reg as u8, byte], &mut buffer)
+            .write_read(
+                self.addr,
+                &mut pin!(I2cAllowRoBuffer::from_array([reg as u8, byte])),
+                &mut pin!(I2cAllowRwBuffer::from_array([0u8])),
+            )
             .await;
     }
 
     async fn read_byte(&mut self, reg: Register) -> u8 {
-        let mut data: [u8; 1] = [0];
+        let mut pinned = pin!(I2cAllowRwBuffer::from_array([0u8]));
         let _ = self
             .com
-            .write_read(self.addr, &[reg as u8], &mut data)
+            .write_read(
+                self.addr,
+                &mut pin!(I2cAllowRoBuffer::from_array([reg as u8])),
+                &mut pinned,
+            )
             .await;
-        data[0]
+
+        I2cAllowRwBuffer::get_mut_buffer(pinned)[0]
     }
 }

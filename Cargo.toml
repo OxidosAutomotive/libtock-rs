@@ -83,7 +83,6 @@ once_cell = { version = "1.21.3", default-features = false, features = [
 portable-atomic = { version = "1", default-features = false, features = [
     "critical-section",
 ], optional = true }
-static_cell = "2.1.1"
 
 [build-dependencies]
 libtock_build_scripts = { path = "build_scripts" }

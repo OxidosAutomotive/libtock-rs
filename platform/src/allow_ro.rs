@@ -1,6 +1,8 @@
 use crate::share::List;
 use crate::Syscalls;
+use core::cell::Cell;
 use core::marker::PhantomData;
+use core::pin::Pin;
 
 // -----------------------------------------------------------------------------
 // `AllowRo` struct
@@ -56,6 +58,77 @@ impl<'share, S: Syscalls, const DRIVER_NUM: u32, const BUFFER_NUM: u32> Drop
 impl<'share, S: Syscalls, const DRIVER_NUM: u32, const BUFFER_NUM: u32> List
     for AllowRo<'share, S, DRIVER_NUM, BUFFER_NUM>
 {
+}
+
+pub struct AllowRoBuffer<
+    S: Syscalls,
+    const DRIVER_NUM: u32,
+    const BUFFER_NUM: u32,
+    const BUFFER_SIZE: usize,
+> {
+    allowed: Cell<bool>,
+    pub buffer: [u8; BUFFER_SIZE],
+    _syscalls: PhantomData<S>,
+}
+
+impl<S: Syscalls, const DRIVER_NUM: u32, const BUFFER_NUM: u32, const BUFFER_SIZE: usize> Default
+    for AllowRoBuffer<S, DRIVER_NUM, BUFFER_NUM, BUFFER_SIZE>
+{
+    fn default() -> Self {
+        Self {
+            allowed: Cell::new(false),
+            buffer: [0u8; BUFFER_SIZE],
+            _syscalls: Default::default(),
+        }
+    }
+}
+
+impl<S: Syscalls, const DRIVER_NUM: u32, const BUFFER_NUM: u32, const BUFFER_SIZE: usize>
+    AllowRoBuffer<S, DRIVER_NUM, BUFFER_NUM, BUFFER_SIZE>
+{
+    pub(crate) unsafe fn buffer_ptr(self: &mut core::pin::Pin<&mut Self>) -> *const u8 {
+        self.buffer.as_ptr()
+    }
+
+    pub fn allow<C: Config>(self: &mut core::pin::Pin<&mut Self>) -> Result<(), crate::ErrorCode> {
+        if !self.allowed.get() {
+            self.allowed.set(true);
+            S::allow_ro_buffer::<C, DRIVER_NUM, BUFFER_NUM, BUFFER_SIZE>(self)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn unallow(&mut self) {
+        if self.allowed.get() {
+            self.allowed.set(false);
+            S::unallow_ro(DRIVER_NUM, BUFFER_NUM);
+        }
+    }
+
+    pub fn from_array(buffer: [u8; BUFFER_SIZE]) -> Self {
+        Self {
+            allowed: Cell::new(false),
+            buffer,
+            _syscalls: Default::default(),
+        }
+    }
+
+    pub fn get_mut_buffer(self: Pin<&mut Self>) -> &mut [u8; BUFFER_SIZE] {
+        if self.allowed.get() {
+            self.allowed.set(false);
+            S::unallow_ro(DRIVER_NUM, BUFFER_NUM);
+        }
+        &mut unsafe { self.get_unchecked_mut() }.buffer
+    }
+}
+
+impl<S: Syscalls, const DRIVER_NUM: u32, const BUFFER_NUM: u32, const BUFFER_SIZE: usize> Drop
+    for AllowRoBuffer<S, DRIVER_NUM, BUFFER_NUM, BUFFER_SIZE>
+{
+    fn drop(&mut self) {
+        self.unallow();
+    }
 }
 
 // -----------------------------------------------------------------------------
