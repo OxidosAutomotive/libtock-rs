@@ -42,6 +42,10 @@ impl StreamingProcessBufferHeader {
         self.flags = Flags::cleared();
         self.write_offset = 0;
     }
+
+    const fn write_offset(&self) -> u32 {
+        self.write_offset
+    }
 }
 
 #[repr(C)]
@@ -113,6 +117,13 @@ impl<'a> StreamingProcessSlice<'a> {
         self.0
     }
 
+    fn header(&self) -> &StreamingProcessBufferHeader {
+        let ptr = self.as_ptr().cast();
+        // SAFETY: `StreamingProcessSlice` constructor guarantees that `self` points to
+        // `StreamingProcessBufferHeader`
+        unsafe { &*ptr }
+    }
+
     fn header_mut(&mut self) -> &mut StreamingProcessBufferHeader {
         let ptr = self.as_mut_ptr().cast();
         // SAFETY: `StreamingProcessSlice` constructor guarantees that `self` points to
@@ -120,16 +131,21 @@ impl<'a> StreamingProcessSlice<'a> {
         unsafe { &mut *ptr }
     }
 
+    fn payload_length(&self) -> usize {
+        // CAST: Tock does not run on 16-bit platforms, so the cast does not truncate the write
+        // offset.
+        self.header().write_offset() as usize
+    }
+
     fn payload(&self) -> &[u8] {
         let ptr: *const u8 = self.as_ptr().cast();
         // SAFETY: the obtained pointer is within the same allocated object, namely a
         // `StreamingProcessBuffer`
         let payload_ptr = unsafe { ptr.byte_add(StreamingProcessBufferHeader::SIZE) };
-        // SAFETY: `StreamingProcessSlice` constructor guarantees that `self` points to
-        // `StreamingProcessBuffer` of length `len`
-        let len = self.len();
+        let payload_len = self.payload_length();
 
-        unsafe { core::slice::from_raw_parts(payload_ptr, len) }
+        // SAFETY: the kernel guarantees that it never writes more than PAYLOAD_SIZE bytes.
+        unsafe { core::slice::from_raw_parts(payload_ptr, payload_len) }
     }
 
     fn payload_mut(&mut self) -> &mut [u8] {
@@ -137,11 +153,10 @@ impl<'a> StreamingProcessSlice<'a> {
         // SAFETY: the obtained pointer is within the same allocated object, namely a
         // `StreamingProcessBuffer`
         let payload_ptr = unsafe { ptr.byte_add(StreamingProcessBufferHeader::SIZE) };
-        // SAFETY: `StreamingProcessSlice` constructor guarantees that `self` points to
-        // `StreamingProcessBuffer` of length `len`
-        let len = self.len();
+        let payload_len = self.payload_length();
 
-        unsafe { core::slice::from_raw_parts_mut(payload_ptr, len) }
+        // SAFETY: the kernel guarantees that it never writes more than PAYLOAD_SIZE bytes.
+        unsafe { core::slice::from_raw_parts_mut(payload_ptr, payload_len) }
     }
 }
 
