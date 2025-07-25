@@ -248,7 +248,8 @@ impl<'a, const DRIVER_NUMBER: u32, const ALLOW_NUMBER: u32, S: RawSyscalls>
     }
 
     pub fn swap(&mut self) -> Result<(), ErrorCode> {
-        let free_slice = self.free_slice.take().unwrap();
+        let mut free_slice = self.free_slice.take().unwrap();
+        free_slice.header_mut().reset();
         let free_slice = Self::allow(free_slice)?.unwrap();
         self.free_slice = Some(free_slice);
 
