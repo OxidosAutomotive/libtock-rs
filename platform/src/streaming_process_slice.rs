@@ -101,10 +101,6 @@ impl<'a> StreamingProcessSlice<'a> {
         unsafe { Self::new_unchecked(ptr, len) }
     }
 
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
     fn as_ptr(&self) -> *const u8 {
         self.0.as_ptr()
     }
