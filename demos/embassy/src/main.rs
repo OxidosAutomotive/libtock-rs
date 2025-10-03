@@ -36,7 +36,7 @@ async fn print(label: &'static str, period_ms: u64) {
         )
         .expect("Capacity exceeded");
 
-        ConsoleAsync::write(&mut pin!(buffer.into_allow_ro_buffer()))
+        ConsoleAsync::write(pin!(buffer.into_allow_ro_buffer()))
             .await
             .unwrap();
 
@@ -53,7 +53,7 @@ async fn button(btn: u32, label: &'static str) {
     let Ok(pin) = res else {
         let mut buffer: ConsoleBufWriter<64> = ConsoleBufWriter::new();
         writeln!(buffer, "Pin {} does not exist.", btn).expect("Capacity exceeded");
-        ConsoleAsync::write(&mut pin!(buffer.into_allow_ro_buffer()))
+        ConsoleAsync::write(pin!(buffer.into_allow_ro_buffer()))
             .await
             .unwrap();
         return;
@@ -68,7 +68,7 @@ async fn button(btn: u32, label: &'static str) {
         for _ in 0..1_000_000 {}
 
         writeln!(buffer, "[Button] {} pressed.", label).expect("Capacity exceeded");
-        ConsoleAsync::write(&mut pin!(buffer.into_allow_ro_buffer()))
+        ConsoleAsync::write(pin!(buffer.into_allow_ro_buffer()))
             .await
             .unwrap();
     }
@@ -76,11 +76,11 @@ async fn button(btn: u32, label: &'static str) {
 
 #[embassy_executor::main(stack_size = 0x3000)]
 async fn main(spawner: Spawner) {
-    spawner.must_spawn(print("Tick", 1000));
-    spawner.must_spawn(button(12, "A"));
-    spawner.must_spawn(button(13, "B"));
-    spawner.must_spawn(button(14, "X"));
-    spawner.must_spawn(button(15, "Y"));
+    spawner.spawn(print("Tick", 1000).unwrap());
+    spawner.spawn(button(12, "A").unwrap());
+    spawner.spawn(button(13, "B").unwrap());
+    spawner.spawn(button(14, "X").unwrap());
+    spawner.spawn(button(15, "Y").unwrap());
 
     let mut bmp280 = bmp280::BMP280::new(AsyncI2cMaster);
     bmp280.read_calibration().await;
@@ -96,7 +96,7 @@ async fn main(spawner: Spawner) {
         let mut buffer: ConsoleBufWriter<64> = ConsoleBufWriter::new();
         let temp = bmp280.temp().await;
         writeln!(buffer, "[Temperature] {:.2}°C", temp).expect("Capacity exceeded");
-        ConsoleAsync::write(&mut pin!(buffer.into_allow_ro_buffer()))
+        ConsoleAsync::write(pin!(buffer.into_allow_ro_buffer()))
             .await
             .unwrap();
         Timer::after_secs(3).await;

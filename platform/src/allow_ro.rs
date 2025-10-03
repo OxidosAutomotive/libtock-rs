@@ -88,11 +88,7 @@ impl<S: Syscalls, const DRIVER_NUM: u32, const BUFFER_NUM: u32, const BUFFER_SIZ
 impl<S: Syscalls, const DRIVER_NUM: u32, const BUFFER_NUM: u32, const BUFFER_SIZE: usize>
     AllowRoBuffer<S, DRIVER_NUM, BUFFER_NUM, BUFFER_SIZE>
 {
-    pub(crate) unsafe fn buffer_ptr(self: &mut core::pin::Pin<&mut Self>) -> *const u8 {
-        self.buffer.as_ptr()
-    }
-
-    pub fn allow<C: Config>(self: &mut core::pin::Pin<&mut Self>) -> Result<(), crate::ErrorCode> {
+    pub fn allow<C: Config>(self: core::pin::Pin<&mut Self>) -> Result<(), crate::ErrorCode> {
         if !self.allowed.get() {
             self.allowed.set(true);
             S::allow_ro_buffer::<C, DRIVER_NUM, BUFFER_NUM, BUFFER_SIZE>(self)

@@ -201,8 +201,8 @@ impl BMP280 {
             .com
             .write_read(
                 self.addr,
-                &mut pin!(I2cAllowRoBuffer::from_array([Register::calib00 as u8])),
-                &mut pinned,
+                pin!(I2cAllowRoBuffer::from_array([Register::calib00 as u8])),
+                pinned.as_mut(),
             )
             .await;
 
@@ -231,8 +231,8 @@ impl BMP280 {
             .com
             .write_read(
                 self.addr,
-                &mut pin!(I2cAllowRoBuffer::from_array([Register::press as u8])),
-                &mut pinned,
+                pin!(I2cAllowRoBuffer::from_array([Register::press as u8])),
+                pinned.as_mut(),
             )
             .await;
 
@@ -265,8 +265,8 @@ impl BMP280 {
             .com
             .write_read(
                 self.addr,
-                &mut pin!(I2cAllowRoBuffer::from_array([Register::press as u8])),
-                &mut pinned,
+                pin!(I2cAllowRoBuffer::from_array([Register::press as u8])),
+                pinned.as_mut(),
             )
             .await;
         let data = I2cAllowRwBuffer::get_mut_buffer(pinned);
@@ -382,8 +382,8 @@ impl BMP280 {
             .com
             .write_read(
                 self.addr,
-                &mut pin!(I2cAllowRoBuffer::from_array([reg as u8, byte])),
-                &mut pin!(I2cAllowRwBuffer::from_array([0u8])),
+                pin!(I2cAllowRoBuffer::from_array([reg as u8, byte])),
+                pin!(I2cAllowRwBuffer::from_array([0u8])),
             )
             .await;
     }
@@ -394,8 +394,8 @@ impl BMP280 {
             .com
             .write_read(
                 self.addr,
-                &mut pin!(I2cAllowRoBuffer::from_array([reg as u8])),
-                &mut pinned,
+                pin!(I2cAllowRoBuffer::from_array([reg as u8])),
+                pinned.as_mut(),
             )
             .await;
 

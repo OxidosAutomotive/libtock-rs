@@ -58,13 +58,12 @@ pub trait Syscalls: RawSyscalls + Sized {
     ) -> Result<(), ErrorCode>;
 
     fn allow_rw_buffer<
-        'share,
         CONFIG: allow_rw::Config,
         const DRIVER_NUM: u32,
         const BUFFER_NUM: u32,
         const BUFFER_SIZE: usize,
     >(
-        allow_rw_buffer: &'share mut core::pin::Pin<
+        allow_rw_buffer: core::pin::Pin<
             &mut allow_rw::AllowRwBuffer<Self, DRIVER_NUM, BUFFER_NUM, BUFFER_SIZE>,
         >,
     ) -> Result<(), ErrorCode>;
@@ -85,13 +84,12 @@ pub trait Syscalls: RawSyscalls + Sized {
     ) -> Result<(), ErrorCode>;
 
     fn allow_ro_buffer<
-        'share,
         CONFIG: allow_ro::Config,
         const DRIVER_NUM: u32,
         const BUFFER_NUM: u32,
         const BUFFER_SIZE: usize,
     >(
-        allow_ro_buffer: &'share mut core::pin::Pin<
+        allow_ro_buffer: core::pin::Pin<
             &mut allow_ro::AllowRoBuffer<Self, DRIVER_NUM, BUFFER_NUM, BUFFER_SIZE>,
         >,
     ) -> Result<(), ErrorCode>;

@@ -77,10 +77,11 @@ impl ConsoleAsyncStorage {
 
 impl ConsoleAsync {
     pub async fn write<const SIZE: usize>(
-        s: &mut Pin<&mut ConsoleAsyncAllowRoBuffer<SIZE>>,
+        mut s: Pin<&mut ConsoleAsyncAllowRoBuffer<SIZE>>,
     ) -> Result<(), ErrorCode> {
         loop {
-            match Self::try_write(s).await {
+            let val = Self::try_write(s.as_mut()).await;
+            match val {
                 Err(ErrorCode::Busy) => embassy_futures::yield_now().await,
                 result => return result,
             }
@@ -88,7 +89,7 @@ impl ConsoleAsync {
     }
 
     pub async fn try_write<const SIZE: usize>(
-        s: &mut Pin<&mut ConsoleAsyncAllowRoBuffer<SIZE>>,
+        s: Pin<&mut ConsoleAsyncAllowRoBuffer<SIZE>>,
     ) -> Result<(), ErrorCode> {
         if STORAGE
             .busy
@@ -114,7 +115,7 @@ impl ConsoleAsync {
     }
 
     pub async fn try_read<const SIZE: usize>(
-        buf: &mut Pin<&mut ConsoleAsyncAllowRwBuffer<SIZE>>,
+        buf: Pin<&mut ConsoleAsyncAllowRwBuffer<SIZE>>,
     ) -> (u32, Result<(), ErrorCode>) {
         if STORAGE
             .busy

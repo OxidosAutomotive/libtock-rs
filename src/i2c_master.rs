@@ -41,7 +41,7 @@ impl AsyncI2cMaster {
     pub async fn read<const SIZE: usize>(
         &mut self,
         addr: u16,
-        read: &mut Pin<&mut I2cAllowRwBuffer<SIZE>>,
+        read: Pin<&mut I2cAllowRwBuffer<SIZE>>,
     ) -> Result<(), ErrorCode> {
         if STORAGE
             .busy
@@ -70,7 +70,7 @@ impl AsyncI2cMaster {
     pub async fn write<const SIZE: usize>(
         &mut self,
         addr: u16,
-        write: &mut Pin<&mut I2cAllowRoBuffer<SIZE>>,
+        write: Pin<&mut I2cAllowRoBuffer<SIZE>>,
     ) -> Result<(), ErrorCode> {
         if STORAGE
             .busy
@@ -97,8 +97,8 @@ impl AsyncI2cMaster {
     pub async fn write_read<const READ_SIZE: usize, const WRITE_SIZE: usize>(
         &mut self,
         addr: u16,
-        write: &mut Pin<&mut I2cAllowRoBuffer<WRITE_SIZE>>,
-        read: &mut Pin<&mut I2cAllowRwBuffer<READ_SIZE>>,
+        write: Pin<&mut I2cAllowRoBuffer<WRITE_SIZE>>,
+        read: Pin<&mut I2cAllowRwBuffer<READ_SIZE>>,
     ) -> Result<(), ErrorCode> {
         if STORAGE
             .busy
@@ -131,7 +131,7 @@ impl AsyncI2cMaster {
         addr: u16,
         w_len: u16,
         r_len: u16,
-        buf: &mut Pin<&mut I2cAllowRwBuffer<SIZE>>,
+        buf: Pin<&mut I2cAllowRwBuffer<SIZE>>,
     ) -> Result<(), ErrorCode> {
         if (r_len as usize) > SIZE || (w_len as usize) > SIZE {
             return Err(ErrorCode::NoMem);

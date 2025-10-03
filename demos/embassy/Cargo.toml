@@ -5,7 +5,6 @@ edition = "2021"
 rust-version.workspace = true
 authors = ["George Dănuț Aldea <danutz.aldea23@gmail.com>"]
 
-# description = """A demo to drive a ST7789 display via SPI using libtock-rs."""
 license = "Apache-2.0 OR MIT"
 
 [dependencies]

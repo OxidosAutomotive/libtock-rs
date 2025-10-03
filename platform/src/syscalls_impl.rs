@@ -258,22 +258,21 @@ impl<S: RawSyscalls> Syscalls for S {
         const BUFFER_NUM: u32,
         const BUFFER_SIZE: usize,
     >(
-        allow_rw_buffer: &'share mut core::pin::Pin<
+        allow_rw_buffer: core::pin::Pin<
             &mut allow_rw::AllowRwBuffer<Self, DRIVER_NUM, BUFFER_NUM, BUFFER_SIZE>,
         >,
     ) -> Result<(), ErrorCode> {
         unsafe fn inner<S: Syscalls, CONFIG: allow_rw::Config>(
             driver_num: u32,
             buffer_num: u32,
-            buffer_ptr: *mut u8,
-            buffer_len: usize,
+            buffer: &mut [u8],
         ) -> Result<(), ErrorCode> {
             let [r0, r1, r2, _] = unsafe {
                 S::syscall4::<{ syscall_class::ALLOW_RW }>([
                     driver_num.into(),
                     buffer_num.into(),
-                    buffer_ptr.into(),
-                    buffer_len.into(),
+                    buffer.as_mut_ptr().into(),
+                    buffer.len().into(),
                 ])
             };
 
@@ -293,8 +292,7 @@ impl<S: RawSyscalls> Syscalls for S {
             inner::<Self, CONFIG>(
                 DRIVER_NUM,
                 BUFFER_NUM,
-                allow_rw_buffer.buffer_ptr(),
-                BUFFER_SIZE,
+                &mut allow_rw_buffer.get_unchecked_mut().buffer,
             )
         }
     }
@@ -401,28 +399,26 @@ impl<S: RawSyscalls> Syscalls for S {
     }
 
     fn allow_ro_buffer<
-        'share,
         CONFIG: allow_ro::Config,
         const DRIVER_NUM: u32,
         const BUFFER_NUM: u32,
         const BUFFER_SIZE: usize,
     >(
-        allow_ro_buffer: &'share mut core::pin::Pin<
+        allow_ro_buffer: core::pin::Pin<
             &mut allow_ro::AllowRoBuffer<Self, DRIVER_NUM, BUFFER_NUM, BUFFER_SIZE>,
         >,
     ) -> Result<(), ErrorCode> {
         unsafe fn inner<S: Syscalls, CONFIG: allow_ro::Config>(
             driver_num: u32,
             buffer_num: u32,
-            buffer_ptr: *const u8,
-            buffer_len: usize,
+            buffer: &[u8],
         ) -> Result<(), ErrorCode> {
             let [r0, r1, r2, _] = unsafe {
                 S::syscall4::<{ syscall_class::ALLOW_RO }>([
                     driver_num.into(),
                     buffer_num.into(),
-                    buffer_ptr.into(),
-                    buffer_len.into(),
+                    buffer.as_ptr().into(),
+                    buffer.len().into(),
                 ])
             };
 
@@ -442,8 +438,7 @@ impl<S: RawSyscalls> Syscalls for S {
             inner::<Self, CONFIG>(
                 DRIVER_NUM,
                 BUFFER_NUM,
-                allow_ro_buffer.buffer_ptr(),
-                BUFFER_SIZE,
+                &allow_ro_buffer.as_ref().get_ref().buffer,
             )
         }
     }
