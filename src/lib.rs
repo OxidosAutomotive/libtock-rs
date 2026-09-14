@@ -57,6 +57,15 @@ pub mod gpio {
         PullDown, PullNone, PullUp,
     };
 }
+
+pub mod crypto {
+    use libtock_crypto as crypto;
+    pub type Hash = crypto::hash::Hash<super::runtime::TockSyscalls>;
+    pub type Hmac = crypto::hmac::Hmac<super::runtime::TockSyscalls>;
+    pub type Hkdf = crypto::hkdf::Hkdf<super::runtime::TockSyscalls>;
+    pub use crypto::HashAlgorithm;
+}
+
 pub mod i2c_master {
     use libtock_i2c_master as i2c_master;
     pub type I2CMaster = i2c_master::I2CMaster<super::runtime::TockSyscalls>;
