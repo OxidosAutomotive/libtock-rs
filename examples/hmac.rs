@@ -10,12 +10,11 @@ stack_size! {0x400}
 set_main! {main}
 
 fn main() {
-    let mut console_writer = Console::writer();
-    let _ = writeln!(console_writer, "Second hello from Rust Userspace :D!!");
     if let Err(e) = Hmac::exists() {
         writeln!(Console::writer(), "HMAC DRIVER ERROR: {e:?}").unwrap();
         return;
     }
+    let mut console_writer = Console::writer();
     let input_buffer = [
         0x12, 0x34, 0x56, 0x78, 0x90, 0x98, 0x76, 0x54, 0x32, 0x12, 0x34, 0x56, 0x78, 0x90, 0x98,
         0x76, 0x54, 0x32, 0x12,
