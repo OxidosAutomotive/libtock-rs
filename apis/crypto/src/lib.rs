@@ -13,4 +13,5 @@ pub enum HashAlgorithm {
     SHA512 = 5,
     SHA512_224 = 6,
     SHA512_256 = 7,
+    SM3 = 8,
 }
