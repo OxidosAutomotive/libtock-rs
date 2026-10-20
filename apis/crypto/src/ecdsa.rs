@@ -36,6 +36,30 @@ impl<S: Syscalls> Ecdsa<S> {
         S::unallow_rw(DRIVER_NUM, rw_allow::OUTPUT_BUF)
     }
 
+    /// Share the private key (32 bytes, big-endian) to load into the signer
+    pub fn allow_private_key_buffer<'share>(
+        buf: &'share [u8],
+        allow_ro: share::Handle<AllowRo<'share, S, DRIVER_NUM, { ro_allow::PRIVATE_KEY_BUF }>>,
+    ) -> Result<(), ErrorCode> {
+        S::allow_ro::<DefaultConfig, DRIVER_NUM, { ro_allow::PRIVATE_KEY_BUF }>(allow_ro, buf)
+    }
+
+    pub fn unallow_private_key_buffer() {
+        S::unallow_ro(DRIVER_NUM, ro_allow::PRIVATE_KEY_BUF)
+    }
+
+    /// Share the buffer the kernel writes the public key (64 bytes, X || Y) into
+    pub fn allow_public_key_buffer<'share>(
+        buf: &'share mut [u8],
+        allow_rw: share::Handle<AllowRw<'share, S, DRIVER_NUM, { rw_allow::PUBLIC_KEY_BUF }>>,
+    ) -> Result<(), ErrorCode> {
+        S::allow_rw::<DefaultConfig, DRIVER_NUM, { rw_allow::PUBLIC_KEY_BUF }>(allow_rw, buf)
+    }
+
+    pub fn unallow_public_key_buffer() {
+        S::unallow_rw(DRIVER_NUM, rw_allow::PUBLIC_KEY_BUF)
+    }
+
     /// Register an Ecdsa listener to be called when an upcall is serviced
     /// Must be used in conjunction with the `share::scope` function
     pub fn register_listener<'share, F: Fn(u32)>(
@@ -79,18 +103,87 @@ impl<S: Syscalls> Ecdsa<S> {
             // Send the command to the kernel driver to fill the allowed_readwrite buffer
             S::command(DRIVER_NUM, cmd::COMPUTE, 0, 0).to_result::<(), ErrorCode>()?;
 
-            // Wait for a callback to happen, then return the status it reported
-            loop {
-                if let Some(result) = status.get() {
-                    return result;
-                }
-                S::yield_wait();
-            }
+            Self::wait_for_done(&status)
         })
+    }
+
+    /// Users must first share the private key buffer with the kernel and register an Ecdsa listener
+    pub fn set_private_key_async() -> Result<(), ErrorCode> {
+        S::command(DRIVER_NUM, cmd::SET_PRIVATE_KEY, 0, 0).to_result()
+    }
+
+    /// Load `private_key` (32 bytes, big-endian, `0 < d < n`) into the signer.
+    ///
+    /// Every following signature is made with this key. The key cannot be
+    /// read back.
+    pub fn set_private_key_sync(private_key: &[u8]) -> Result<(), ErrorCode> {
+        let status: Cell<Option<Result<(), ErrorCode>>> = Cell::new(None);
+        share::scope::<
+            (
+                AllowRo<S, DRIVER_NUM, { ro_allow::PRIVATE_KEY_BUF }>,
+                Subscribe<S, DRIVER_NUM, { subscribe::DONE }>,
+            ),
+            _,
+            _,
+        >(|handle| {
+            let (allow_ro, subscribe) = handle.split();
+
+            Self::allow_private_key_buffer(private_key, allow_ro)?;
+
+            S::subscribe::<_, _, DefaultConfig, DRIVER_NUM, { subscribe::DONE }>(
+                subscribe, &status,
+            )?;
+
+            S::command(DRIVER_NUM, cmd::SET_PRIVATE_KEY, 0, 0).to_result::<(), ErrorCode>()?;
+
+            Self::wait_for_done(&status)
+        })
+    }
+
+    /// Users must first share the public key buffer with the kernel and register an Ecdsa listener
+    pub fn get_public_key_async() -> Result<(), ErrorCode> {
+        S::command(DRIVER_NUM, cmd::GET_PUBLIC_KEY, 0, 0).to_result()
+    }
+
+    /// Write the public key `Q = d·G` of the loaded private key into
+    /// `public_key` (64 bytes, uncompressed `X || Y`, big-endian).
+    pub fn get_public_key_sync(public_key: &mut [u8]) -> Result<(), ErrorCode> {
+        let status: Cell<Option<Result<(), ErrorCode>>> = Cell::new(None);
+        share::scope::<
+            (
+                AllowRw<S, DRIVER_NUM, { rw_allow::PUBLIC_KEY_BUF }>,
+                Subscribe<S, DRIVER_NUM, { subscribe::DONE }>,
+            ),
+            _,
+            _,
+        >(|handle| {
+            let (allow_rw, subscribe) = handle.split();
+
+            Self::allow_public_key_buffer(public_key, allow_rw)?;
+
+            S::subscribe::<_, _, DefaultConfig, DRIVER_NUM, { subscribe::DONE }>(
+                subscribe, &status,
+            )?;
+
+            S::command(DRIVER_NUM, cmd::GET_PUBLIC_KEY, 0, 0).to_result::<(), ErrorCode>()?;
+
+            Self::wait_for_done(&status)
+        })
+    }
+
+    /// Wait for a callback to happen, then return the status it reported
+    fn wait_for_done(status: &Cell<Option<Result<(), ErrorCode>>>) -> Result<(), ErrorCode> {
+        loop {
+            if let Some(result) = status.get() {
+                return result;
+            }
+            S::yield_wait();
+        }
     }
 }
 
-/// The provided listener to be called.
+/// The provided listener to be called with the status of the finished
+/// operation. All operations share the same upcall.
 pub struct EcdsaListener<F: Fn(u32)>(pub F);
 
 impl<F: Fn(u32)> Upcall<OneId<DRIVER_NUM, 0>> for EcdsaListener<F> {
@@ -110,6 +203,8 @@ const DRIVER_NUM: u32 = 0x40008;
 mod cmd {
     pub const EXISTS: u32 = 0;
     pub const COMPUTE: u32 = 1;
+    pub const SET_PRIVATE_KEY: u32 = 2;
+    pub const GET_PUBLIC_KEY: u32 = 3;
 }
 // ---------------
 // READ-ONLY BUFFER NUMBERS
@@ -117,6 +212,8 @@ mod cmd {
 mod ro_allow {
     /// Hash to be signed
     pub const INPUT_BUF: u32 = 0;
+    /// Private key to load into the signer
+    pub const PRIVATE_KEY_BUF: u32 = 1;
 }
 
 // ---------------
@@ -125,6 +222,8 @@ mod ro_allow {
 mod rw_allow {
     /// Signature output
     pub const OUTPUT_BUF: u32 = 0;
+    /// Public key output
+    pub const PUBLIC_KEY_BUF: u32 = 1;
 }
 
 // ---------------
