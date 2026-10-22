@@ -5,47 +5,39 @@ pub mod hash;
 pub mod hkdf;
 pub mod hmac;
 
-#[derive(Debug)]
-pub enum HashAlgorithm {
-    MD5 = 0,
-    SHA1 = 1,
-    SHA224 = 2,
-    SHA256 = 3,
-    SHA384 = 4,
-    SHA512 = 5,
-    SHA512_224 = 6,
-    SHA512_256 = 7,
-    SHA3_224 = 8,
-    SHA3_256 = 9,
-    SHA3_384 = 10,
-    SHA3_512 = 11,
-    SHAKE128 = 12,
-    SHAKE256 = 13,
-    SM3 = 14,
+pub trait DigestAlgorithm {
+    const COMMAND_NUM: u32;
+    const DIGEST_LEN: usize;
+    const BLOCK_LEN: usize;
+    type Output: AsRef<[u8]> + AsMut<[u8]> + Sized;
+    const ZEROED: Self::Output;
 }
 
-impl TryFrom<u32> for HashAlgorithm {
-    type Error = ();
+macro_rules! digest_algorithm {
+    ($name:ident, $command_num:expr, $digest_len:expr, $block_len:expr) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub struct $name;
 
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        use HashAlgorithm::*;
-        Ok(match value {
-            0 => MD5,
-            1 => SHA1,
-            2 => SHA224,
-            3 => SHA256,
-            4 => SHA384,
-            5 => SHA512,
-            6 => SHA512_224,
-            7 => SHA512_256,
-            8 => SHA3_224,
-            9 => SHA3_256,
-            10 => SHA3_384,
-            11 => SHA3_512,
-            12 => SHAKE128,
-            13 => SHAKE256,
-            14 => SM3,
-            _ => return Err(()),
-        })
-    }
+        impl DigestAlgorithm for $name {
+            const COMMAND_NUM: u32 = $command_num;
+            const DIGEST_LEN: usize = $digest_len;
+            const BLOCK_LEN: usize = $block_len;
+            type Output = [u8; $digest_len];
+            const ZEROED: Self::Output = [0u8; $digest_len];
+        }
+    };
 }
+
+digest_algorithm!(Md5, 0, 16, 512 >> 3);
+digest_algorithm!(Sha1, 1, 20, 512 >> 3);
+digest_algorithm!(Sha224, 2, 28, 512 >> 3);
+digest_algorithm!(Sha256, 3, 32, 512 >> 3);
+digest_algorithm!(Sha384, 4, 48, 1024 >> 3);
+digest_algorithm!(Sha512, 5, 64, 1024 >> 3);
+digest_algorithm!(Sha512_224, 6, 28, 1024 >> 3);
+digest_algorithm!(Sha512_256, 7, 32, 1024 >> 3);
+digest_algorithm!(Sha3_224, 8, 28, 1152 >> 3);
+digest_algorithm!(Sha3_256, 9, 32, 1088 >> 3);
+digest_algorithm!(Sha3_384, 10, 48, 832 >> 3);
+digest_algorithm!(Sha3_512, 11, 64, 576 >> 3);
+digest_algorithm!(Sm3, 14, 32, 512 >> 3);
