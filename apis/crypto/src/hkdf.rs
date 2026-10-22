@@ -87,13 +87,13 @@ impl<S: Syscalls, A: DigestAlgorithm> Hkdf<S, A> {
         S::command(DRIVER_NUM, cmd::COMPUTE, A::COMMAND_NUM, 0).to_result()
     }
 
-    pub fn compute_sync(
+    pub fn compute_sync<const LEN: usize>(
         ikm_buf: &[u8],
         salt_buf: Option<&[u8]>,
         info_buf: Option<&[u8]>,
-        okm_buf: &mut [u8],
-    ) -> Result<(), ErrorCode> {
+    ) -> Result<[u8; LEN], ErrorCode> {
         let status: Cell<Option<(u32,)>> = Cell::new(None);
+        let mut okm_buf = [0u8; LEN];
         let mut prk_buf = A::ZEROED;
         share::scope::<
             (
@@ -112,17 +112,15 @@ impl<S: Syscalls, A: DigestAlgorithm> Hkdf<S, A> {
 
             Self::allow_ikm_buffer(ikm_buf, allow_ro_ikm)?;
             Self::allow_prk_buffer(&mut prk_buf, allow_rw_prk)?;
-            Self::allow_okm_buffer(okm_buf, allow_rw_okm)?;
+            Self::allow_okm_buffer(&mut okm_buf, allow_rw_okm)?;
 
-            match salt_buf {
-                Some(buf) => Self::allow_salt_buffer(buf, allow_ro_salt)?,
-                None => Self::unallow_salt_buffer(),
+            if let Some(buf) = salt_buf {
+                Self::allow_salt_buffer(buf, allow_ro_salt)?;
             };
 
-            match info_buf {
-                Some(buf) => Self::allow_info_buffer(buf, allow_ro_info)?,
-                None => Self::unallow_info_buffer(),
-            };
+            if let Some(buf) = info_buf {
+                Self::allow_info_buffer(buf, allow_ro_info)?;
+            }
 
             // Subscribe for an upcall with the kernel
             S::subscribe::<_, _, DefaultConfig, DRIVER_NUM, { subscribe::DONE }>(
@@ -141,7 +139,8 @@ impl<S: Syscalls, A: DigestAlgorithm> Hkdf<S, A> {
                 Some((0,)) => Ok(()),
                 _ => Err(ErrorCode::Fail),
             }
-        })
+        })?;
+        Ok(okm_buf)
     }
 }
 

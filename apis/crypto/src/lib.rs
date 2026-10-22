@@ -9,7 +9,9 @@ pub trait DigestAlgorithm {
     const COMMAND_NUM: u32;
     const DIGEST_LEN: usize;
     const BLOCK_LEN: usize;
+
     type Output: AsRef<[u8]> + AsMut<[u8]> + Sized;
+
     const ZEROED: Self::Output;
 }
 
