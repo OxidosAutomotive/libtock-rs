@@ -30,16 +30,19 @@ macro_rules! digest_algorithm {
     };
 }
 
-digest_algorithm!(Md5, 0, 16, 512 >> 3);
-digest_algorithm!(Sha1, 1, 20, 512 >> 3);
-digest_algorithm!(Sha224, 2, 28, 512 >> 3);
-digest_algorithm!(Sha256, 3, 32, 512 >> 3);
-digest_algorithm!(Sha384, 4, 48, 1024 >> 3);
-digest_algorithm!(Sha512, 5, 64, 1024 >> 3);
-digest_algorithm!(Sha512_224, 6, 28, 1024 >> 3);
-digest_algorithm!(Sha512_256, 7, 32, 1024 >> 3);
-digest_algorithm!(Sha3_224, 8, 28, 1152 >> 3);
-digest_algorithm!(Sha3_256, 9, 32, 1088 >> 3);
-digest_algorithm!(Sha3_384, 10, 48, 832 >> 3);
-digest_algorithm!(Sha3_512, 11, 64, 576 >> 3);
-digest_algorithm!(Sm3, 14, 32, 512 >> 3);
+pub mod algos {
+    use crate::DigestAlgorithm;
+    digest_algorithm!(Md5, 0, 16, 512 >> 3);
+    digest_algorithm!(Sha1, 1, 20, 512 >> 3);
+    digest_algorithm!(Sha224, 2, 28, 512 >> 3);
+    digest_algorithm!(Sha256, 3, 32, 512 >> 3);
+    digest_algorithm!(Sha384, 4, 48, 1024 >> 3);
+    digest_algorithm!(Sha512, 5, 64, 1024 >> 3);
+    digest_algorithm!(Sha512_224, 6, 28, 1024 >> 3);
+    digest_algorithm!(Sha512_256, 7, 32, 1024 >> 3);
+    digest_algorithm!(Sha3_224, 8, 28, 1152 >> 3);
+    digest_algorithm!(Sha3_256, 9, 32, 1088 >> 3);
+    digest_algorithm!(Sha3_384, 10, 48, 832 >> 3);
+    digest_algorithm!(Sha3_512, 11, 64, 576 >> 3);
+    digest_algorithm!(Sm3, 14, 32, 512 >> 3);
+}

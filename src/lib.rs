@@ -60,11 +60,11 @@ pub mod gpio {
 
 pub mod crypto {
     use libtock_crypto as crypto;
-    pub type Hash = crypto::hash::Hash<super::runtime::TockSyscalls>;
-    pub type Hmac = crypto::hmac::Hmac<super::runtime::TockSyscalls>;
-    pub type Hkdf = crypto::hkdf::Hkdf<super::runtime::TockSyscalls>;
+    pub type Hash<A> = crypto::hash::Hash<super::runtime::TockSyscalls, A>;
+    pub type Hmac<A> = crypto::hmac::Hmac<super::runtime::TockSyscalls, A>;
+    pub type Hkdf<A> = crypto::hkdf::Hkdf<super::runtime::TockSyscalls, A>;
     pub type Ecdsa = crypto::ecdsa::Ecdsa<super::runtime::TockSyscalls>;
-    pub use crypto::HashAlgorithm;
+    pub use crypto::algos::*;
 }
 
 pub mod i2c_master {
