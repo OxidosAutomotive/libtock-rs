@@ -63,7 +63,9 @@ pub mod crypto {
     pub type Hash = crypto::hash::Hash<super::runtime::TockSyscalls>;
     pub type Hmac = crypto::hmac::Hmac<super::runtime::TockSyscalls>;
     pub type Hkdf = crypto::hkdf::Hkdf<super::runtime::TockSyscalls>;
-    pub use crypto::HashAlgorithm;
+    pub type Ecdsa = crypto::ecdsa::Ecdsa<super::runtime::TockSyscalls>;
+    pub use crypto::algos::*;
+    pub use crypto::DigestAlgorithm;
 }
 
 pub mod i2c_master {
