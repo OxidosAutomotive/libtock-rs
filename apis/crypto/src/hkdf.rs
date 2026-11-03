@@ -1,12 +1,12 @@
-use core::cell::Cell;
+use core::{cell::Cell, marker::PhantomData};
 use libtock_platform::{
     share, subscribe::OneId, AllowRo, AllowRw, DefaultConfig, ErrorCode, Subscribe, Syscalls,
     Upcall,
 };
 
-use crate::HashAlgorithm;
+use crate::DigestAlgorithm;
 
-pub struct Hkdf<S: Syscalls>(S);
+pub struct Hkdf<S: Syscalls>(PhantomData<S>);
 
 impl<S: Syscalls> Hkdf<S> {
     /// Check if the Hash kernel driver exists
@@ -47,11 +47,11 @@ impl<S: Syscalls> Hkdf<S> {
         S::unallow_ro(DRIVER_NUM, ro_allow::IKM_BUF)
     }
 
-    pub fn allow_prk_buffer<'share>(
-        buf: &'share mut [u8],
+    pub fn allow_prk_buffer<'share, A: DigestAlgorithm>(
+        buf: &'share mut A::Output,
         allow_rw: share::Handle<AllowRw<'share, S, DRIVER_NUM, { rw_allow::PRK_BUF }>>,
     ) -> Result<(), ErrorCode> {
-        S::allow_rw::<DefaultConfig, DRIVER_NUM, { rw_allow::PRK_BUF }>(allow_rw, buf)
+        S::allow_rw::<DefaultConfig, DRIVER_NUM, { rw_allow::PRK_BUF }>(allow_rw, buf.as_mut())
     }
 
     pub fn unallow_prk_buffer() {
@@ -83,19 +83,18 @@ impl<S: Syscalls> Hkdf<S> {
     }
 
     /// Users must first share buffer slices with the kernel and register a Hash listener
-    pub fn compute_async(algo: HashAlgorithm) -> Result<(), ErrorCode> {
-        S::command(DRIVER_NUM, cmd::COMPUTE, algo as u32, 0).to_result()
+    pub fn compute_async<A: DigestAlgorithm>() -> Result<(), ErrorCode> {
+        S::command(DRIVER_NUM, cmd::COMPUTE, A::COMMAND_NUM, 0).to_result()
     }
 
-    pub fn compute_sync(
-        algo: HashAlgorithm,
+    pub fn compute_sync<A: DigestAlgorithm, const LEN: usize>(
         ikm_buf: &[u8],
-        prk_buf: &mut [u8],
-        okm_buf: &mut [u8],
         salt_buf: Option<&[u8]>,
         info_buf: Option<&[u8]>,
-    ) -> Result<(), ErrorCode> {
-        let called = Cell::new(false);
+    ) -> Result<[u8; LEN], ErrorCode> {
+        let status: Cell<Option<(u32,)>> = Cell::new(None);
+        let mut okm_buf = [0u8; LEN];
+        let mut prk_buf = A::ZEROED;
         share::scope::<
             (
                 AllowRo<S, DRIVER_NUM, { ro_allow::IKM_BUF }>,
@@ -112,34 +111,36 @@ impl<S: Syscalls> Hkdf<S> {
                 handle.split();
 
             Self::allow_ikm_buffer(ikm_buf, allow_ro_ikm)?;
-            Self::allow_prk_buffer(prk_buf, allow_rw_prk)?;
-            Self::allow_okm_buffer(okm_buf, allow_rw_okm)?;
+            Self::allow_prk_buffer::<A>(&mut prk_buf, allow_rw_prk)?;
+            Self::allow_okm_buffer(&mut okm_buf, allow_rw_okm)?;
 
-            match salt_buf {
-                Some(buf) => Self::allow_salt_buffer(buf, allow_ro_salt)?,
-                None => Self::unallow_salt_buffer(),
+            if let Some(buf) = salt_buf {
+                Self::allow_salt_buffer(buf, allow_ro_salt)?;
             };
 
-            match info_buf {
-                Some(buf) => Self::allow_info_buffer(buf, allow_ro_info)?,
-                None => Self::unallow_info_buffer(),
-            };
+            if let Some(buf) = info_buf {
+                Self::allow_info_buffer(buf, allow_ro_info)?;
+            }
 
             // Subscribe for an upcall with the kernel
             S::subscribe::<_, _, DefaultConfig, DRIVER_NUM, { subscribe::DONE }>(
-                subscribe, &called,
+                subscribe, &status,
             )?;
 
             // Send the command to the kernel driver to fill the allowed_readwrite buffer
-            S::command(DRIVER_NUM, cmd::COMPUTE, algo as u32, 0).to_result::<(), ErrorCode>()?;
+            S::command(DRIVER_NUM, cmd::COMPUTE, A::COMMAND_NUM, 0).to_result::<(), ErrorCode>()?;
 
             // Wait for a callback to happen
-            while !called.get() {
+            while status.get().is_none() {
                 S::yield_wait();
             }
 
-            Ok(())
-        })
+            match status.get() {
+                Some((0,)) => Ok(()),
+                _ => Err(ErrorCode::Fail),
+            }
+        })?;
+        Ok(okm_buf)
     }
 }
 
